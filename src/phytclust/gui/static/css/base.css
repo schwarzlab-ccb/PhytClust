@@ -39,13 +39,25 @@
   --pc-radius-md: 12px;
   --pc-radius-lg: 16px;
   --pc-sidebar-width: 340px;
-  --pc-header-height: 52px;
+  --pc-header-height: 56px;
   --pc-transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
   --pc-link-color: #64748b;
   --pc-tree-branch: #000000;
   --pc-tree-label: #334155;
   --pc-tree-internal: #64748b;
+
+  /* PhytClust cluster palette — also used for the brand spectrum strip.
+     Order chosen to flow purple → blue → teal → olive → yellow → red → pink,
+     mirroring the gradient sweep of the wordmark logo. */
+  --pc-palette-1: #6e3f8a;
+  --pc-palette-2: #3f408a;
+  --pc-palette-3: #3f648a;
+  --pc-palette-4: #3d7c74;
+  --pc-palette-5: #849060;
+  --pc-palette-6: #ceb94b;
+  --pc-palette-7: #b84b4b;
+  --pc-palette-8: #da63aa;
 }
 
 /* --- Dark Theme --- */
@@ -80,6 +92,18 @@
   --pc-tree-branch: #000000;
   --pc-tree-label: #d0c8e0;
   --pc-tree-internal: #8a80a8;
+
+  /* Same brand palette in dark mode — slightly desaturated would also
+     work here, but keeping identical hues makes the spectrum strip the
+     same visual signature regardless of theme. */
+  --pc-palette-1: #6e3f8a;
+  --pc-palette-2: #3f408a;
+  --pc-palette-3: #3f648a;
+  --pc-palette-4: #3d7c74;
+  --pc-palette-5: #849060;
+  --pc-palette-6: #ceb94b;
+  --pc-palette-7: #b84b4b;
+  --pc-palette-8: #da63aa;
 }
 
 /* --- Reset & Base --- */

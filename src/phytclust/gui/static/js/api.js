@@ -4,7 +4,7 @@
    ============================================================ */
 
 import { state } from "./state.js";
-import { newickEl, resultEl, extraOutgroupEl, extraRootTaxonEl, extraResolutionEl } from "./dom.js";
+import { newickEl, extraOutgroupEl, extraRootTaxonEl, extraResolutionEl } from "./dom.js";
 import { showToast } from "./ui/toast.js";
 import { showStatus } from "./ui/status.js";
 import { estimateLeafCount, isOutgroupInNewick, parseNewick, readIntParam, readFloatParam, readCheckParam, readSelectParam } from "./utils.js";
@@ -115,7 +115,6 @@ export async function runPhytClust() {
     payload.use_relative_prominence = true;
 
   showStatus("Running PhytClust...", "info");
-  resultEl.textContent = "Running PhytClust...";
   clearTree();
 
   var runBtn = document.getElementById("btn-run");
@@ -132,8 +131,19 @@ export async function runPhytClust() {
 
     state.latestApiData = data;
     state.latestRunId = data.run_id || null;
+
+    state.runHistory.unshift({
+      ts: Date.now(),
+      mode,
+      label:
+        mode === "k"
+          ? "k=" + (data.k != null ? data.k : kVal) + " · " + dt.toFixed(1) + "s"
+          : mode + " · " + dt.toFixed(1) + "s",
+      nLeaves: numSamples,
+    });
+    if (state.runHistory.length > 8) state.runHistory.pop();
+
     showStatus(`Finished in ${dt.toFixed(2)}s`, "success");
-    resultEl.textContent = JSON.stringify(data, null, 2);
 
     var lcLabel = document.getElementById("leaf-count-label");
     if (lcLabel && data.newick)
@@ -193,7 +203,6 @@ export async function runPhytClust() {
   } catch (e) {
     console.error(e);
     showStatus("Error: " + e.message, "danger");
-    resultEl.textContent = "Error: " + e;
     state.latestOptimalKData = null;
     state.latestApiData = null;
   } finally {

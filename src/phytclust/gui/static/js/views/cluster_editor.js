@@ -98,7 +98,7 @@ export function openClusterEditor() {
   if (showOutliersCb) showOutliersCb.checked = true;
   renderClusterEditorRows();
   if (labelSizeInput) {
-    labelSizeInput.value = String(Math.round(state.CLUSTER_LABEL_FONT_SIZE));
+    labelSizeInput.value = String(Math.round(state.render.clusters.labelFontSize));
   }
   if (modal) modal.classList.add("show");
   if (bg) bg.classList.add("show");
@@ -127,7 +127,7 @@ export function saveClusterEditor() {
   if (labelSizeInput) {
     const v = parseFloat(labelSizeInput.value);
     if (!isNaN(v)) {
-      state.CLUSTER_LABEL_FONT_SIZE = Math.min(36, Math.max(6, v));
+      state.render.clusters.labelFontSize = Math.min(36, Math.max(6, v));
     }
   }
 

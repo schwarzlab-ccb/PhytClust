@@ -50,6 +50,7 @@
               placeholder="Search nodes..."
               autocomplete="off"
             />
+            <span id="search-counter" class="search-counter" hidden></span>
           </div>
 
           <!-- Cluster selector -->
@@ -109,7 +110,6 @@
               <option value="circular">Circular</option>
             </select>
           </div>
-          <div class="toolbar-divider"></div>
           <div class="toolbar-group">
             <label for="palette-select">Palette</label>
             <select id="palette-select">
@@ -130,7 +130,6 @@
               &#x1F500;
             </button>
           </div>
-          <div class="toolbar-divider"></div>
           <div class="toolbar-group">
             <label for="color-mode">Color</label>
             <select id="color-mode">
@@ -139,177 +138,27 @@
               <option value="nodes">Nodes</option>
             </select>
           </div>
-          <div class="toolbar-divider"></div>
-          <div class="branch-options-wrap">
-            <button
-              id="branch-options-toggle"
-              class="btn-ghost"
-              type="button"
-              style="font-size: 11px; padding: 3px 10px"
-              aria-expanded="false"
-            >
-              Show branch options
-            </button>
-            <div id="branch-options-panel" class="toolbar-collapsible">
-              <div class="toolbar-divider"></div>
-              <div class="toolbar-group">
-                <label for="node-size">Leaf size</label>
-                <input
-                  type="number"
-                  id="node-size"
-                  min="1"
-                  max="10"
-                  step="0.5"
-                  value="3.0"
-                  style="width: 50px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="label-size">Label</label>
-                <input
-                  type="number"
-                  id="label-size"
-                  min="6"
-                  max="36"
-                  value="9"
-                  style="width: 50px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="axis-font-size">Axis</label>
-                <input
-                  type="number"
-                  id="axis-font-size"
-                  min="6"
-                  max="18"
-                  value="10"
-                  style="width: 50px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="branch-width">Branch</label>
-                <input
-                  type="number"
-                  id="branch-width"
-                  min="0.5"
-                  max="6"
-                  step="0.1"
-                  value="1.2"
-                  style="width: 56px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="branch-color">Branch color</label>
-                <input
-                  type="color"
-                  id="branch-color"
-                  value="#000000"
-                  title="Set branch color"
-                  style="width: 34px; height: 28px; padding: 2px"
-                />
-                <button
-                  id="branch-color-reset"
-                  class="btn-ghost"
-                  type="button"
-                  style="font-size: 11px; padding: 2px 8px"
-                  title="Reset to default"
-                >
-                  Reset
-                </button>
-              </div>
-              <div class="toolbar-divider"></div>
-              <div class="toolbar-group">
-                <div class="slider-control">
-                  <span class="slider-label">W</span>
-                  <input
-                    type="range"
-                    id="tree-width-scale"
-                    min="0.1"
-                    max="8.0"
-                    step="0.1"
-                    value="1.0"
-                  />
-                </div>
-                <div class="slider-control">
-                  <span class="slider-label">H</span>
-                  <input
-                    type="range"
-                    id="tree-height-scale"
-                    min="0.1"
-                    max="8.0"
-                    step="0.1"
-                    value="1.0"
-                  />
-                </div>
-              </div>
-              <div class="toolbar-divider"></div>
-              <label class="check-row"
-                ><input type="checkbox" id="show-leaf-names" checked />
-                Leaves</label
-              >
-              <label class="check-row"
-                ><input type="checkbox" id="show-internal-names" />
-                Internal</label
-              >
-              <label class="check-row"
-                ><input type="checkbox" id="show-box-labels" checked /> Box
-                labels</label
-              >
-              <label class="check-row"
-                ><input type="checkbox" id="show-outlier-boxes" checked />
-                Outlier boxes</label
-              >
-              <div class="toolbar-group">
-                <label for="box-alpha">Box &alpha;</label>
-                <input
-                  type="range"
-                  id="box-alpha"
-                  min="0.02"
-                  max="0.5"
-                  step="0.02"
-                  value="0.12"
-                  style="width: 60px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="box-pad-v">Box pad V</label>
-                <input
-                  type="range"
-                  id="box-pad-v"
-                  min="0"
-                  max="30"
-                  step="1"
-                  value="8"
-                  style="width: 60px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="box-pad-h">Box pad H</label>
-                <input
-                  type="range"
-                  id="box-pad-h"
-                  min="0"
-                  max="30"
-                  step="1"
-                  value="6"
-                  style="width: 60px"
-                />
-              </div>
-              <div class="toolbar-group">
-                <label for="box-radius">Box radius</label>
-                <input
-                  type="range"
-                  id="box-radius"
-                  min="0"
-                  max="20"
-                  step="1"
-                  value="6"
-                  style="width: 60px"
-                />
-              </div>
-            </div>
-          </div>
-          <div class="toolbar-divider"></div>
+          <button
+            id="appearance-toggle"
+            class="btn-ghost"
+            type="button"
+            style="font-size: 11px; padding: 3px 10px"
+            aria-expanded="false"
+            title="Appearance options"
+          >
+            &#x2699; Appearance
+          </button>
+          <div class="toolbar-spacer"></div>
+          <button
+            id="btn-fit-tree"
+            class="btn-icon"
+            type="button"
+            title="Fit to screen (F)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
           <button
             id="btn-reset-view"
             class="btn-icon"
@@ -348,6 +197,14 @@
                   style="width: 60px; height: 24px; font-size: 11px"
                 />
               </div>
+              <label
+                class="copy-dropdown-quality"
+                title="Bigger fonts, thicker branches, opaque cluster boxes"
+                style="cursor: pointer"
+              >
+                <input type="checkbox" id="copy-publication" />
+                Publication style
+              </label>
             </div>
           </div>
         </div>
@@ -359,10 +216,96 @@
               + Add comparison bar
             </button>
           </div>
-          <span class="text-sm text-muted"
-            >Add as many comparisons as needed. For file mode, upload a CSV/TSV
-            with two columns: leaf_name and cluster_id.</span
+          <div class="toolbar-group">
+            <label class="toolbar-checkbox" title="Highlight leaves whose cluster changes between bars">
+              <input type="checkbox" id="compare-highlight-changes" />
+              Highlight changes
+            </label>
+          </div>
+          <div class="toolbar-group" id="compare-reference-group" style="display: none">
+            <label for="compare-reference">Reference</label>
+            <select id="compare-reference" class="form-input" style="height: 26px; font-size: 11px"></select>
+          </div>
+          <span class="text-sm text-muted" id="compare-summary" style="font-size: 11px"></span>
+          <div class="appearance-trigger-wrap">
+            <button
+              id="appearance-toggle-compare"
+              class="btn-ghost"
+              type="button"
+              style="font-size: 11px; padding: 3px 10px"
+              aria-expanded="false"
+              title="Appearance options (shared with Viewer)"
+            >
+              &#x2699; Appearance
+            </button>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <button
+            id="btn-copy-tsv-compare"
+            class="btn-ghost"
+            type="button"
+            title="Copy table as TSV"
+            style="font-size: 11px; padding: 3px 10px; margin-right: 4px"
           >
+            Copy TSV
+          </button>
+          <button
+            id="btn-download-tsv-compare"
+            class="btn-ghost"
+            type="button"
+            title="Download table as TSV"
+            style="font-size: 11px; padding: 3px 10px; margin-right: 8px"
+          >
+            Download TSV
+          </button>
+          <button
+            id="btn-fit-compare"
+            class="btn-icon"
+            type="button"
+            title="Fit to screen"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
+          <div
+            class="copy-dropdown-wrap"
+            style="position: relative; display: inline-block"
+          >
+            <button
+              id="btn-copy-compare"
+              class="btn-icon"
+              type="button"
+              title="Copy comparison to clipboard"
+            >
+              &#x1F4CB;
+            </button>
+            <div class="copy-dropdown" id="copy-dropdown-compare" style="display: none">
+              <div class="copy-dropdown-title">Copy to clipboard</div>
+              <button class="dropdown-item" data-copy-fmt="svg">SVG (vector)</button>
+              <button class="dropdown-item" data-copy-fmt="png">PNG</button>
+              <button class="dropdown-item" data-copy-fmt="jpg">JPG</button>
+              <div class="copy-dropdown-quality">
+                <label for="copy-dpi-compare">DPI:</label>
+                <input
+                  type="number"
+                  id="copy-dpi-compare"
+                  min="72"
+                  max="1200"
+                  value="300"
+                  style="width: 60px; height: 24px; font-size: 11px"
+                />
+              </div>
+              <label
+                class="copy-dropdown-quality"
+                title="Bigger fonts, thicker branches"
+                style="cursor: pointer"
+              >
+                <input type="checkbox" id="copy-publication-compare" />
+                Publication style
+              </label>
+            </div>
+          </div>
         </div>
 
         <div id="compare-config-list" class="compare-config-list"></div>
@@ -392,6 +335,35 @@
         <div class="viz-container">
           <div class="viz-panel active" id="viewer" role="tabpanel">
             <div id="tree_display"></div>
+            <div class="tree-empty-state" id="tree-empty-state" role="region" aria-label="Get started">
+              <div class="empty-spectrum" aria-hidden="true"></div>
+              <h2 class="empty-title">Get started in three steps</h2>
+              <ol class="empty-steps">
+                <li>
+                  <span class="empty-step-num">1</span>
+                  <span class="empty-step-text">Drop a Newick file or paste it in the sidebar.</span>
+                </li>
+                <li>
+                  <span class="empty-step-num">2</span>
+                  <span class="empty-step-text">Pick a clustering mode — <em>Auto</em> works for most trees.</span>
+                </li>
+                <li>
+                  <span class="empty-step-num">3</span>
+                  <span class="empty-step-text">Click <strong>Run PhytClust</strong>.</span>
+                </li>
+              </ol>
+              <div class="empty-actions">
+                <button id="btn-empty-example" class="btn-primary" type="button">
+                  Try the example tree
+                </button>
+                <button id="btn-empty-help" class="btn-ghost" type="button">
+                  Open help
+                </button>
+              </div>
+              <div class="empty-hint">
+                Press <kbd>?</kbd> any time to see keyboard shortcuts.
+              </div>
+            </div>
             <!-- Mini scores panel (bottom-right overlay on tree) -->
             <div class="mini-scores-panel" id="mini-scores-panel">
               <div class="mini-scores-header">
@@ -418,6 +390,7 @@
                 Add comparison bars from k results or uploaded files.
               </div>
               <div class="compare-tree" id="compare-tree-left"></div>
+              <div id="compare-agreement" class="compare-agreement"></div>
             </div>
           </div>
 
@@ -426,7 +399,29 @@
           </div>
 
           <div class="viz-panel json-panel" id="debug" role="tabpanel">
-            <pre id="result">(waiting for run...)</pre>
+            <div class="session-toolbar">
+              <span class="session-title">Session</span>
+              <span class="session-hint">
+                Settings, appearance, and tree — portable across runs.
+              </span>
+              <div class="session-actions">
+                <label class="session-checkbox">
+                  <input type="checkbox" id="session-include-newick" checked />
+                  Include tree
+                </label>
+                <button id="btn-session-download" class="btn-secondary" type="button">
+                  Download JSON
+                </button>
+                <label for="session-load-input" class="btn-secondary session-load-btn">
+                  Load JSON&hellip;
+                </label>
+                <input type="file" id="session-load-input" accept=".json,application/json" hidden />
+                <button id="btn-session-copy" class="btn-ghost" type="button" title="Copy to clipboard">
+                  Copy
+                </button>
+              </div>
+            </div>
+            <pre id="result">(no session yet — load a tree and configure parameters)</pre>
           </div>
         </div>
 
@@ -436,5 +431,12 @@
           <span id="status-message">Ready</span>
           <div style="flex: 1"></div>
           <span class="text-sm text-muted" id="leaf-count-label"></span>
+          <button id="btn-activity-log" class="activity-log-btn" type="button" title="Activity log">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            Log
+          </button>
         </div>
       </div>

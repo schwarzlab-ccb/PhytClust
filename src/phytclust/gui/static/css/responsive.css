@@ -6,11 +6,10 @@
   .toolbar {
     padding: 8px 14px;
   }
-  .toolbar-collapsible {
+  .appearance-panel {
     right: auto;
     left: 0;
-    min-width: min(92vw, 640px);
-    grid-template-columns: repeat(2, minmax(150px, 1fr));
+    width: min(92vw, 320px);
   }
   .search-box input {
     width: 90px;

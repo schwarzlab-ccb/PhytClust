@@ -15,10 +15,143 @@
 .viz-panel.active {
   display: block;
 }
+.viz-panel#compare.active {
+  display: flex;
+  flex-direction: column;
+}
 #tree_display {
   width: 100%;
   height: 100%;
   min-height: 500px;
+}
+
+/* ===================== EMPTY STATE ============================
+   Shown in the viewer panel when no tree has been loaded yet.
+   Visibility is controlled directly via inline style by drawTree()
+   in tree/draw.js — gated on state.NEWICK_RAW_TREE rather than a
+   CSS class so no stylesheet rule can accidentally hide it. */
+.tree-empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 32px;
+  text-align: center;
+  color: var(--pc-text);
+  pointer-events: auto;
+  z-index: 5;
+}
+
+/* Subtle palette flourish that ties the empty state to the brand */
+.empty-spectrum {
+  width: 220px;
+  height: 4px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--pc-palette-1),
+    var(--pc-palette-2),
+    var(--pc-palette-3),
+    var(--pc-palette-4),
+    var(--pc-palette-5),
+    var(--pc-palette-6),
+    var(--pc-palette-7),
+    var(--pc-palette-8)
+  );
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--pc-text);
+}
+
+.empty-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+  text-align: left;
+  max-width: 460px;
+  width: 100%;
+}
+.empty-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--pc-text-secondary);
+  line-height: 1.5;
+}
+.empty-step-num {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--pc-accent-subtle);
+  color: var(--pc-accent);
+  font-weight: 600;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.empty-step-text em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--pc-text);
+}
+.empty-step-text strong {
+  color: var(--pc-accent);
+}
+
+.empty-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.empty-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--pc-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.empty-hint kbd {
+  /* Inherits the global kbd style from modals.css */
+  font-size: 10.5px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 5px;
+}
+
+/* Make sure tree_display can be overlaid by the empty state */
+#viewer {
+  position: relative;
+}
+
+/* ===================== SEARCH COUNTER ===================== */
+.search-counter {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pc-text-secondary);
+  background: var(--pc-accent-subtle);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.search-counter.no-matches {
+  background: var(--pc-danger-subtle);
+  color: var(--pc-danger);
 }
 #optimalk_plot {
   width: 100%;
@@ -46,9 +179,11 @@
 /* ===================== COMPARE VIEW ===================== */
 .compare-pane {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .compare-header {
   padding: 8px 16px;
@@ -58,11 +193,13 @@
   background: var(--pc-surface);
   border-bottom: 1px solid var(--pc-border-subtle);
   text-align: center;
+  flex-shrink: 0;
 }
 .compare-tree {
-  flex: 1;
+  flex-shrink: 0;
   overflow: auto;
   min-height: 400px;
+  height: 55vh;
 }
 
 .compare-config-list {
@@ -97,6 +234,62 @@
 .compare-config-card .form-input {
   height: 30px;
 }
+
+/* Toolbar checkbox styling */
+.toolbar-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--pc-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.toolbar-checkbox input { margin: 0; }
+
+/* Compare empty state (no tree loaded yet) */
+.compare-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--pc-text-muted);
+}
+.compare-empty-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--pc-text);
+  margin-bottom: 8px;
+}
+.compare-empty-text { max-width: 420px; font-size: 13px; line-height: 1.5; }
+
+/* Highlight leaves whose cluster differs across bars */
+.compare-tree .compare-leaf-changed text {
+  font-weight: 700;
+  fill: #f97316 !important;
+}
+.compare-tree .compare-leaf-changed-marker {
+  fill: #f97316;
+}
+
+/* ===================== COMPARE AGREEMENT MATRIX ===================== */
+.compare-agreement { padding: 12px 16px; border-top: 1px solid var(--pc-border); overflow-x: auto; }
+.agree-pair { margin-bottom: 20px; }
+.agree-pair-title { font-size: 12px; font-weight: 600; color: var(--pc-text-muted); margin-bottom: 8px; letter-spacing: 0.03em; }
+.agree-table { border-collapse: collapse; font-size: 11px; }
+.agree-table th, .agree-table td { padding: 4px 8px; text-align: center; min-width: 36px; }
+.agree-table .agree-row-label { text-align: right; font-weight: 600; color: var(--pc-text); padding-right: 10px; white-space: nowrap; }
+.agree-table .agree-col-label { font-weight: 600; color: var(--pc-text); white-space: nowrap; }
+.agree-table .agree-col-bar { font-size: 10px; color: var(--pc-text-muted); }
+.agree-cell { border: 1px solid var(--pc-border); border-radius: 3px; font-weight: 500; }
+.agree-cell.agree-cell-zero { color: transparent; }
+.badge-split { display: inline-block; margin-left: 4px; font-size: 9px; font-weight: 700; background: #f97316; color: white; border-radius: 3px; padding: 1px 4px; vertical-align: middle; }
+.badge-merge { display: inline-block; margin-left: 4px; font-size: 9px; font-weight: 700; background: #8b5cf6; color: white; border-radius: 3px; padding: 1px 4px; vertical-align: middle; }
+.agree-exact { font-size: 9px; color: #10b981; margin-left: 2px; }
+.agree-summary { font-size: 11px; color: var(--pc-text-muted); margin-top: 6px; }
 
 /* ===================== CLUSTER SELECTOR ===================== */
 .cluster-selector {
@@ -207,4 +400,41 @@
   color: var(--pc-text-muted);
   min-width: 14px;
   text-align: center;
+}
+
+/* ===================== NODE HOVER TOOLTIP ===================== */
+.node-tooltip {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: var(--pc-surface);
+  border: 1px solid var(--pc-border);
+  border-radius: var(--pc-radius-md);
+  box-shadow: var(--pc-shadow-lg);
+  padding: 8px 11px;
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 230px;
+}
+.node-tooltip .tt-name {
+  font-weight: 600;
+  color: var(--pc-text);
+  margin-bottom: 3px;
+}
+.node-tooltip .tt-name em {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--pc-text-muted);
+}
+.node-tooltip .tt-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--pc-text-secondary);
+}
+.node-tooltip .tt-key {
+  min-width: 50px;
+  color: var(--pc-text-muted);
+  flex-shrink: 0;
 }

@@ -48,12 +48,21 @@
   height: 100%;
 }
 
-/* ===================== SEARCH HIGHLIGHT ===================== */
+/* ===================== SEARCH HIGHLIGHT =====================
+   Matches need to read at a glance against busy trees, so the
+   text gets a soft yellow halo (paint-order: stroke fill) and
+   the node circle gets a thicker accent stroke. */
 .node-search-match text {
   fill: var(--pc-accent) !important;
   font-weight: 700 !important;
+  paint-order: stroke fill;
+  stroke: var(--pc-warning, #f5d76e);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  stroke-opacity: 0.7;
 }
 .node-search-match circle {
   stroke: var(--pc-accent) !important;
   stroke-width: 2.5 !important;
+  filter: drop-shadow(0 0 3px var(--pc-accent-glow, rgba(61, 139, 122, 0.5)));
 }

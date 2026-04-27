@@ -1,35 +1,44 @@
       <!-- SIDEBAR -->
       <aside class="sidebar" id="app-sidebar">
-        <!-- Data Input -->
+        <!-- 1. Tree input — most important, always visible -->
         <div class="sidebar-section">
-          <div class="section-title">Data Input</div>
+          <div class="section-title">Tree</div>
           <div class="upload-zone" id="upload-zone">
             <input
               type="file"
               id="file-input"
-              accept=".new,.nwk,.newick,.txt,.tree"
+              accept=".new,.nwk,.newick,.txt,.tree,.json,application/json"
             />
             <svg
-              width="24"
-              height="24"
+              width="18"
+              height="18"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
               stroke-width="1.5"
               opacity="0.4"
+              flex-shrink="0"
             >
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
-            <div class="upload-text">Drop Newick file or click to browse</div>
-            <div class="upload-hint">.nwk .newick .new .txt .tree</div>
+            <div class="upload-zone-content">
+              <div class="upload-text">Drop a tree file or click to browse</div>
+              <div class="upload-hint">.nwk · .newick · .tree · .json</div>
+            </div>
           </div>
           <div class="file-name-display" id="file-name" style="display: none">
             <span class="file-badge" id="file-badge"></span>
+            <button id="btn-clear-tree" class="file-clear-btn" type="button" title="Clear loaded tree">&times;</button>
           </div>
-          <div class="newick-area">
-            <label for="newick-input">Or paste Newick string</label>
+          <button class="newick-toggle" id="newick-toggle" type="button" aria-expanded="false">
+            <span>↳ paste Newick instead</span>
+            <svg class="newick-toggle-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </button>
+          <div class="newick-area" id="newick-area" hidden>
             <textarea
               id="newick-input"
               rows="3"
@@ -38,9 +47,32 @@
           </div>
         </div>
 
-        <!-- Clustering Mode -->
+        <!-- 2. Rooting — second most important, promoted out of collapse -->
         <div class="sidebar-section">
-          <div class="section-title">Clustering Mode</div>
+          <div class="section-title">Rooting</div>
+          <div class="form-group compact">
+            <label for="extra-outgroup">Outgroup</label>
+            <input
+              type="text"
+              id="extra-outgroup"
+              class="form-input"
+              placeholder="Taxon to exclude"
+            />
+          </div>
+          <div class="form-group compact">
+            <label for="extra-root-taxon">Root taxon</label>
+            <input
+              type="text"
+              id="extra-root-taxon"
+              class="form-input"
+              placeholder='Taxon name or "midpoint"'
+            />
+          </div>
+        </div>
+
+        <!-- 3. Clustering mode — the main decision the user is making -->
+        <div class="sidebar-section">
+          <div class="section-title">Clustering mode</div>
           <div class="mode-selector" id="mode-selector">
             <button class="mode-btn active" data-mode="global" type="button">
               Auto
@@ -53,8 +85,8 @@
             </button>
           </div>
 
-          <div id="mode-params" style="margin-top: 14px">
-            <div class="form-group" id="param-k" style="display: none">
+          <div id="mode-params" style="margin-top: 10px">
+            <div class="form-group compact" id="param-k" style="display: none">
               <label for="extra-k">Number of clusters (k)</label>
               <input
                 type="number"
@@ -63,9 +95,8 @@
                 class="form-input"
                 placeholder="e.g. 5"
               />
-              <div class="hint">Exact k-way partition</div>
             </div>
-            <div class="form-group" id="param-topn">
+            <div class="form-group compact" id="param-topn">
               <label for="extra-topn">Top N peaks</label>
               <input
                 type="number"
@@ -74,10 +105,9 @@
                 class="form-input"
                 placeholder="1"
               />
-              <div class="hint">Number of optimal k values to return</div>
             </div>
-            <div class="form-group" id="param-bins" style="display: none">
-              <label for="extra-bins">Number of bins</label>
+            <div class="form-group compact" id="param-bins" style="display: none">
+              <label for="extra-bins">Resolution bins</label>
               <input
                 type="number"
                 min="2"
@@ -85,43 +115,32 @@
                 class="form-input"
                 placeholder="3"
               />
-              <div class="hint">Log-spaced bins for multi-resolution</div>
             </div>
           </div>
+          <div class="toggle-row" style="margin-top: 10px">
+            <span class="toggle-label">Compute all k</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="extra-compute-all" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="hint compact">Cache every k — enables cycling and Compare tab</div>
         </div>
 
-        <!-- Tree & Rooting (collapsible) -->
+        <!-- 4. Refinement — commonly tweaked options -->
         <div class="sidebar-section">
           <button
             class="collapse-trigger"
-            id="tree-opts-toggle"
+            id="refine-opts-toggle"
             type="button"
             aria-expanded="false"
           >
             <span class="chevron">&#x25B6;</span>
-            Tree &amp; Rooting
+            Refinement
           </button>
-          <div id="tree-opts-body" class="collapse-body">
-            <div class="form-group">
-              <label for="extra-outgroup">Outgroup</label>
-              <input
-                type="text"
-                id="extra-outgroup"
-                class="form-input"
-                placeholder="Taxon name to exclude"
-              />
-            </div>
-            <div class="form-group">
-              <label for="extra-root-taxon">Root taxon</label>
-              <input
-                type="text"
-                id="extra-root-taxon"
-                class="form-input"
-                placeholder='Taxon name or "midpoint"'
-              />
-              <div class="hint">Root tree on this taxon, or use "midpoint"</div>
-            </div>
-            <div class="form-group">
+          <div id="refine-opts-body" class="collapse-body">
+            <h4 class="subsection-title">k bounds</h4>
+            <div class="form-group compact">
               <label for="extra-maxk">Max k</label>
               <input
                 type="number"
@@ -130,22 +149,9 @@
                 class="form-input"
                 placeholder="auto"
               />
-              <div class="hint">Upper bound for number of clusters</div>
+              <div class="hint">Upper bound on cluster count</div>
             </div>
-            <div class="form-group">
-              <label for="extra-maxklimit">Max k fraction</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                max="1"
-                id="extra-maxklimit"
-                class="form-input"
-                placeholder="0.9"
-              />
-              <div class="hint">max_k = ceil(fraction &times; leaves)</div>
-            </div>
-            <div class="form-group">
+            <div class="form-group compact">
               <label for="extra-min-cluster-size">Min cluster size</label>
               <input
                 type="number"
@@ -155,22 +161,29 @@
                 placeholder="1"
               />
             </div>
-          </div>
-        </div>
 
-        <!-- Scoring & Peak Detection (collapsible) -->
-        <div class="sidebar-section">
-          <button
-            class="collapse-trigger"
-            id="peak-opts-toggle"
-            type="button"
-            aria-expanded="false"
-          >
-            <span class="chevron">&#x25B6;</span>
-            Scoring &amp; Peak Detection
-          </button>
-          <div id="peak-opts-body" class="collapse-body">
-            <div class="form-group">
+            <h4 class="subsection-title">Outliers</h4>
+            <div class="toggle-row">
+              <span class="toggle-label">Mark outliers</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="extra-outlier" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="form-group compact">
+              <label for="extra-outlier-threshold">Size threshold</label>
+              <input
+                type="number"
+                min="1"
+                id="extra-outlier-threshold"
+                class="form-input"
+                placeholder="2"
+              />
+              <div class="hint">Clusters smaller than this are outliers</div>
+            </div>
+
+            <h4 class="subsection-title">Peak detection</h4>
+            <div class="form-group compact">
               <label for="extra-lambda">Lambda weight</label>
               <input
                 type="number"
@@ -181,18 +194,45 @@
                 class="form-input"
                 placeholder="0.7"
               />
-              <div class="hint">
-                Balance prominence vs. score (0=score, 1=prominence)
-              </div>
+              <div class="hint">0 = score · 1 = prominence</div>
             </div>
-            <div class="form-group">
+            <div class="form-group compact">
               <label for="extra-ranking-mode">Ranking mode</label>
               <select id="extra-ranking-mode" class="form-input">
                 <option value="adjusted">Adjusted</option>
                 <option value="raw">Raw</option>
               </select>
             </div>
-            <div class="form-group">
+          </div>
+        </div>
+
+        <!-- 5. Expert — rarely-used tuning -->
+        <div class="sidebar-section">
+          <button
+            class="collapse-trigger"
+            id="expert-opts-toggle"
+            type="button"
+            aria-expanded="false"
+          >
+            <span class="chevron">&#x25B6;</span>
+            Expert
+          </button>
+          <div id="expert-opts-body" class="collapse-body">
+            <h4 class="subsection-title">Advanced k tuning</h4>
+            <div class="form-group compact">
+              <label for="extra-maxklimit">Max k fraction</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                max="1"
+                id="extra-maxklimit"
+                class="form-input"
+                placeholder="0.9"
+              />
+              <div class="hint">max_k = ceil(fraction × leaves)</div>
+            </div>
+            <div class="form-group compact">
               <label for="extra-min-prominence">Min prominence</label>
               <input
                 type="number"
@@ -210,45 +250,8 @@
                 <span class="slider"></span>
               </label>
             </div>
-          </div>
-        </div>
 
-        <!-- Outlier Detection (collapsible) -->
-        <div class="sidebar-section">
-          <button
-            class="collapse-trigger"
-            id="outlier-opts-toggle"
-            type="button"
-            aria-expanded="false"
-          >
-            <span class="chevron">&#x25B6;</span>
-            Outlier Detection
-          </button>
-          <div id="outlier-opts-body" class="collapse-body">
-            <div class="toggle-row">
-              <span class="toggle-label">Mark outliers</span>
-              <label class="toggle-switch">
-                <input type="checkbox" id="extra-outlier" checked />
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="hint" style="margin-top: -4px">
-              Label small clusters as outliers (-1)
-            </div>
-
-            <div class="form-group" style="margin-top: 10px">
-              <label for="extra-outlier-threshold"
-                >Outlier size threshold</label
-              >
-              <input
-                type="number"
-                min="1"
-                id="extra-outlier-threshold"
-                class="form-input"
-                placeholder="2"
-              />
-              <div class="hint">Clusters smaller than this are outliers</div>
-            </div>
+            <h4 class="subsection-title">Outlier tuning</h4>
             <div class="toggle-row">
               <span class="toggle-label">Prefer fewer outliers</span>
               <label class="toggle-switch">
@@ -256,29 +259,16 @@
                 <span class="slider"></span>
               </label>
             </div>
-            <div class="form-group" style="margin-top: 10px">
-              <label for="extra-outlier-ratio-mode">Outlier ratio mode</label>
+            <div class="form-group compact">
+              <label for="extra-outlier-ratio-mode">Ratio mode</label>
               <select id="extra-outlier-ratio-mode" class="form-input">
                 <option value="exp">Exponential</option>
                 <option value="inverse">Inverse</option>
                 <option value="power">Power</option>
               </select>
             </div>
-          </div>
-        </div>
 
-        <!-- Polytomy Handling (collapsible) -->
-        <div class="sidebar-section">
-          <button
-            class="collapse-trigger"
-            id="polytomy-opts-toggle"
-            type="button"
-            aria-expanded="false"
-          >
-            <span class="chevron">&#x25B6;</span>
-            Polytomy Handling
-          </button>
-          <div id="polytomy-opts-body" class="collapse-body">
+            <h4 class="subsection-title">Polytomy</h4>
             <div class="toggle-row">
               <span class="toggle-label">Optimize polytomies</span>
               <label class="toggle-switch">
@@ -286,33 +276,18 @@
                 <span class="slider"></span>
               </label>
             </div>
-            <div class="hint" style="margin-top: -4px">
-              Use native DP over multifurcations
-            </div>
-            <div class="toggle-row" style="margin-top: 8px">
+            <div class="toggle-row">
               <span class="toggle-label">No split zero-length</span>
               <label class="toggle-switch">
                 <input type="checkbox" id="extra-no-split-zero" />
                 <span class="slider"></span>
               </label>
             </div>
-            <div class="hint">Prevent splitting at zero-length branches</div>
-          </div>
-        </div>
 
-        <!-- Branch Support (collapsible) -->
-        <div class="sidebar-section">
-          <button
-            class="collapse-trigger"
-            id="support-opts-toggle"
-            type="button"
-            aria-expanded="false"
-          >
-            <span class="chevron">&#x25B6;</span>
-            Branch Support
-            <span class="badge-experimental">experimental</span>
-          </button>
-          <div id="support-opts-body" class="collapse-body">
+            <h4 class="subsection-title">
+              Branch support
+              <span class="badge-experimental">experimental</span>
+            </h4>
             <div class="toggle-row">
               <span class="toggle-label">Use branch support</span>
               <label class="toggle-switch">
@@ -320,11 +295,7 @@
                 <span class="slider"></span>
               </label>
             </div>
-            <div class="hint" style="margin-top: -4px">
-              Incorporate support values into clustering.
-              This feature has not been fully tested.
-            </div>
-            <div class="form-group" style="margin-top: 10px">
+            <div class="form-group compact">
               <label for="extra-min-support">Min support</label>
               <input
                 type="number"
@@ -336,7 +307,7 @@
                 placeholder="0.05"
               />
             </div>
-            <div class="form-group">
+            <div class="form-group compact">
               <label for="extra-support-weight">Support weight</label>
               <input
                 type="number"
@@ -347,35 +318,21 @@
                 placeholder="1.0"
               />
             </div>
-          </div>
-        </div>
 
-        <!-- Advanced (collapsible) -->
-        <div class="sidebar-section">
-          <button
-            class="collapse-trigger"
-            id="advanced-opts-toggle"
-            type="button"
-            aria-expanded="false"
-          >
-            <span class="chevron">&#x25B6;</span>
-            Advanced
-          </button>
-          <div id="advanced-opts-body" class="collapse-body">
-            <div class="toggle-row">
-              <span class="toggle-label">Compute all clusters</span>
-              <label class="toggle-switch">
-                <input type="checkbox" id="extra-compute-all" />
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="hint" style="margin-top: -4px">
-              Cache every k (enables cycling and comparison)
+            <h4 class="subsection-title">Server</h4>
+            <div class="form-group compact">
+              <label for="output-dir">Output directory</label>
+              <input
+                type="text"
+                id="output-dir"
+                class="form-input"
+                placeholder="results"
+              />
             </div>
 
-            <div style="margin-top: 12px">
+            <div style="margin-top: 10px">
               <button id="btn-extra-reset" class="btn-ghost danger" type="button">
-                Reset to defaults
+                Reset all to defaults
               </button>
             </div>
           </div>
@@ -393,64 +350,22 @@
             Run PhytClust
           </button>
 
-          <div
-            style="
-              display: flex;
-              gap: 8px;
-              margin-top: 10px;
-              align-items: center;
-            "
-          >
-            <div class="save-group" style="flex: 1">
-              <button
-                id="btn-save"
-                class="btn-secondary"
-                type="button"
-                style="width: 100%"
-              >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                >
+          <div style="margin-top: 10px">
+            <div class="save-group" style="width: 100%">
+              <button id="btn-save" class="btn-secondary" type="button" style="width: 100%">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M2 14h12M8 2v9M5 8l3 3 3-3" />
                 </svg>
                 Export
               </button>
               <div class="save-dropdown" id="save-dropdown">
-                <button class="dropdown-item" data-save-type="tsv">
-                  Download TSV
-                </button>
-                <button class="dropdown-item" data-save-type="tree_plot">
-                  Download tree (SVG)
-                </button>
-                <button class="dropdown-item" data-save-type="tree_png">
-                  Download tree (PNG)
-                </button>
-                <button class="dropdown-item" data-save-type="k_plot">
-                  Download scores (SVG)
-                </button>
-                <button class="dropdown-item" data-save-type="save_server">
-                  Save all to server
-                </button>
+                <button class="dropdown-item" data-save-type="tsv">Download TSV</button>
+                <button class="dropdown-item" data-save-type="tree_plot">Download tree (SVG)</button>
+                <button class="dropdown-item" data-save-type="tree_png">Download tree (PNG)</button>
+                <button class="dropdown-item" data-save-type="k_plot">Download scores (SVG)</button>
+                <button class="dropdown-item" data-save-type="save_server">Save all to server</button>
               </div>
             </div>
-          </div>
-
-          <div class="form-group" style="margin-top: 10px; margin-bottom: 0">
-            <label for="output-dir" style="font-size: 11px"
-              >Server output directory</label
-            >
-            <input
-              type="text"
-              id="output-dir"
-              class="form-input"
-              placeholder="results"
-              style="height: 30px; font-size: 12px"
-            />
           </div>
         </div>
       </aside>

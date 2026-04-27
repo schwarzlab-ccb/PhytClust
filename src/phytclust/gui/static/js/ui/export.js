@@ -3,8 +3,35 @@
    Download, SVG/PNG export, clipboard helpers.
    ============================================================ */
 
-import { state } from "../state.js";
+import { state, withRenderOverrides } from "../state.js";
+import { drawTree } from "../tree/draw.js";
 import { showToast } from "./toast.js";
+
+/**
+ * Render-option overrides applied when "Publication style" is requested.
+ * Bigger fonts, thicker strokes, fully-opaque cluster boxes — tuned for
+ * inclusion in print figures rather than on-screen browsing.
+ */
+export const PUBLICATION_PRESET = {
+  branches: { width: 2.0 },
+  labels: { fontSize: 12, axisFontSize: 12 },
+  nodes: { leafRadius: 4.0 },
+  clusters: { boxAlpha: 0.25, labelFontSize: 11 },
+};
+
+/**
+ * Run `fn` with the live tree temporarily redrawn under PUBLICATION_PRESET
+ * (or no overrides if `usePreset` is false). The view flashes briefly while
+ * the snapshot is taken, then the original render state is restored.
+ *
+ * `redraw` defaults to `drawTree`; callers exporting from the Compare tab
+ * pass `drawComparison` so the preset actually applies to that view before
+ * the snapshot.
+ */
+function withExportPreset(usePreset, fn, redraw = drawTree) {
+  if (!usePreset) return fn();
+  return withRenderOverrides(PUBLICATION_PRESET, redraw, fn);
+}
 
 export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -75,33 +102,40 @@ export function getTightSvgSnapshot(svgNode, paddingPx) {
   };
 }
 
-export function exportSvgFromEl(selector, filename) {
-  const svgNode = document.querySelector(selector + " svg");
-  if (!svgNode) {
-    showToast("No visualization to export.", "danger");
-    return;
-  }
-  const snap = getTightSvgSnapshot(svgNode, 10);
-  if (!snap) {
-    showToast("SVG export failed.", "danger");
-    return;
-  }
-  downloadBlob(
-    new Blob([snap.svgData], {
-      type: "image/svg+xml",
-    }),
-    filename,
-  );
-  showToast("Downloaded " + filename, "success", 2000);
+export function exportSvgFromEl(selector, filename, opts = {}) {
+  withExportPreset(opts.usePreset, () => {
+    const svgNode = document.querySelector(selector + " svg");
+    if (!svgNode) {
+      showToast("No visualization to export.", "danger");
+      return;
+    }
+    const snap = getTightSvgSnapshot(svgNode, 10);
+    if (!snap) {
+      showToast("SVG export failed.", "danger");
+      return;
+    }
+    downloadBlob(
+      new Blob([snap.svgData], {
+        type: "image/svg+xml",
+      }),
+      filename,
+    );
+    showToast("Downloaded " + filename, "success", 2000);
+  }, opts.redraw);
 }
 
-export function exportPngFromEl(selector, filename, dpi) {
-  const svgNode = document.querySelector(selector + " svg");
+export function exportPngFromEl(selector, filename, dpi, opts = {}) {
+  let snap = null;
+  let svgNode = null;
+  withExportPreset(opts.usePreset, () => {
+    svgNode = document.querySelector(selector + " svg");
+    if (!svgNode) return;
+    snap = getTightSvgSnapshot(svgNode, 10);
+  }, opts.redraw);
   if (!svgNode) {
     showToast("No visualization to export.", "danger");
     return;
   }
-  const snap = getTightSvgSnapshot(svgNode, 10);
   if (!snap) {
     showToast("PNG export failed.", "danger");
     return;
@@ -148,13 +182,18 @@ export function exportPngFromEl(selector, filename, dpi) {
   img.src = url;
 }
 
-export function copyRasterToClipboard(selector, dpi, mimeType) {
-  var svgNode = document.querySelector(selector + " svg");
+export function copyRasterToClipboard(selector, dpi, mimeType, opts = {}) {
+  var snap = null;
+  var svgNode = null;
+  withExportPreset(opts && opts.usePreset, function () {
+    svgNode = document.querySelector(selector + " svg");
+    if (!svgNode) return;
+    snap = getTightSvgSnapshot(svgNode, 10);
+  }, opts && opts.redraw);
   if (!svgNode) {
     showToast("Nothing to copy.", "danger");
     return;
   }
-  var snap = getTightSvgSnapshot(svgNode, 10);
   if (!snap) {
     showToast("Copy failed.", "danger");
     return;
@@ -231,13 +270,18 @@ export function copyRasterToClipboard(selector, dpi, mimeType) {
   img.src = url;
 }
 
-export function copySvgToClipboard(selector) {
-  const svgNode = document.querySelector(selector + " svg");
+export function copySvgToClipboard(selector, opts = {}) {
+  let snap = null;
+  let svgNode = null;
+  withExportPreset(opts.usePreset, () => {
+    svgNode = document.querySelector(selector + " svg");
+    if (!svgNode) return;
+    snap = getTightSvgSnapshot(svgNode, 10);
+  }, opts.redraw);
   if (!svgNode) {
     showToast("Nothing to copy.", "danger");
     return;
   }
-  const snap = getTightSvgSnapshot(svgNode, 10);
   if (!snap) {
     showToast("Copy failed", "danger");
     return;

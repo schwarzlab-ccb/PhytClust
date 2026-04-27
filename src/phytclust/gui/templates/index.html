@@ -31,9 +31,26 @@
 
     {% include "partials/_modal_about.html" %}
     {% include "partials/_modal_cluster_editor.html" %}
+    {% include "partials/_modal_shortcuts.html" %}
+
+    <!-- Global appearance panel — fixed top-right, opened by either
+         the Viewer toolbar trigger or the Compare toolbar trigger. -->
+    <div id="appearance-panel"></div>
     {% include "partials/_help_sidebar.html" %}
     {% include "partials/_context_menu.html" %}
     {% include "partials/_footer.html" %}
+
+    <!-- Node hover tooltip — positioned by draw.js on mouseenter -->
+    <div id="node-tooltip" class="node-tooltip" hidden></div>
+
+    <!-- Activity log panel — floats above the status bar -->
+    <div id="activity-log-panel" class="activity-log-panel" hidden>
+      <div class="activity-log-header">
+        <span>Activity log</span>
+        <button id="btn-activity-log-clear" class="btn-log-clear" type="button">Clear</button>
+      </div>
+      <div id="activity-log-body" class="activity-log-body"></div>
+    </div>
 
     <!-- App Scripts -->
     <script type="module" src="/static/js/main.js"></script>

@@ -4,24 +4,12 @@
    ============================================================ */
 
 export const state = {
+  // --- Data state ---------------------------------------------------------
   HIER_CART: null,
   HIER_CIRC: null,
-
-  SHOW_LEAF_NAMES: true,
-  SHOW_INTERNAL_NAMES: false,
-  LEAF_NODE_RADIUS: 3.0,
-  INTERNAL_NODE_RADIUS: 1.8,
-  LABEL_FONT_SIZE: 9,
-  AXIS_FONT_SIZE: 10,
-  TREE_WIDTH_SCALE: 1.0,
-  TREE_HEIGHT_SCALE: 1.0,
-  BRANCH_STROKE_WIDTH: 1.2,
-  BRANCH_COLOR_OVERRIDE: null,
   CLUSTER_COLORS: [],
   CURRENT_CLUSTERS: {},
   NEWICK_RAW_TREE: null,
-  CURRENT_LAYOUT_MODE: "rectangular",
-  COLOR_MODE: "bars",
 
   isRunning: false,
   latestOptimalKData: null,
@@ -29,22 +17,127 @@ export const state = {
   latestRunId: null,
   LAST_TREE_SVG: null,
   LAST_TREE_ZOOM: null,
+  LAST_ZOOM_LAYER: null,
   LAST_TREE_TRANSFORM: d3.zoomIdentity,
+  LAST_COMPARE_SVG: null,
+  LAST_COMPARE_ZOOM: null,
+  LAST_COMPARE_LAYER: null,
   SEARCH_TERM: "",
-  SHOW_BOX_LABELS: true,
-  SHOW_OUTLIER_BOXES: true,
-  BOX_ALPHA: 0.12,
-  BOX_PAD_V: 8,
-  BOX_PAD_H: 6,
-  BOX_CORNER_RADIUS: 6,
-  CLUSTER_LABEL_FONT_SIZE: 8,
 
   CLUSTER_VIEW_MODE: "peaks",
   COMPARE_CONFIGS: [],
   COMPARE_CONFIG_NEXT_ID: 1,
+  COMPARE_HIGHLIGHT_CHANGES: false,
+  COMPARE_REFERENCE_INDEX: 0,
+  COMPARE_CHANGED_LEAVES: new Set(),
 
   CTX_TARGET_DATA: null,
+  runHistory: [],
+
+  // --- Render options (single source of truth for "what the tree looks like") ---
+  // Read/write via state.render.* directly, or via setRenderOption /
+  // getRenderOption for dotted-path access.
+  render: {
+    layout: "rectangular", // "rectangular" | "circular"
+    branches: {
+      width: 1.2,
+      color: null,       // null = use cluster colour
+      colorByClusters: false,
+    },
+    labels: {
+      show: true,
+      internalShow: false,
+      fontSize: 9,
+      axisFontSize: 10,
+    },
+    nodes: {
+      leafRadius: 3.0,
+      internalRadius: 1.8,
+    },
+    clusters: {
+      colorMode: "bars", // "bars" | "boxes" | ...
+      labelFontSize: 8,
+      showBoxLabels: true,
+      showOutlierBoxes: true,
+      boxAlpha: 0.12,
+      boxPadV: 8,
+      boxPadH: 6,
+      boxCornerRadius: 6,
+    },
+    scale: {
+      width: 1.0,
+      height: 1.0,
+    },
+    compare: {
+      barWidth: 16,
+      barGap: 6,
+      showColumnTitles: true,
+    },
+  },
 };
+
+/**
+ * Set a render option by dotted path, e.g. setRenderOption("labels.fontSize", 12).
+ * Does not trigger a redraw — callers handle that. Returns the value written.
+ */
+export function setRenderOption(path, value) {
+  const parts = path.split(".");
+  let cur = state.render;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  cur[parts[parts.length - 1]] = value;
+  return value;
+}
+
+/**
+ * Read a render option by dotted path, e.g. getRenderOption("labels.fontSize").
+ */
+export function getRenderOption(path) {
+  const parts = path.split(".");
+  let cur = state.render;
+  for (const k of parts) cur = cur[k];
+  return cur;
+}
+
+/**
+ * Return a deep copy of state.render with the given overrides merged in.
+ * Useful for "publication preset" exports that want a tweaked snapshot
+ * without mutating the live render state.
+ */
+export function renderOptionsWithOverrides(overrides = {}) {
+  const clone = JSON.parse(JSON.stringify(state.render));
+  const merge = (dst, src) => {
+    for (const [k, v] of Object.entries(src)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        if (!dst[k] || typeof dst[k] !== "object") dst[k] = {};
+        merge(dst[k], v);
+      } else {
+        dst[k] = v;
+      }
+    }
+  };
+  merge(clone, overrides);
+  return clone;
+}
+
+/**
+ * Temporarily swap state.render for a copy with `overrides` merged in,
+ * invoke `fn`, then restore the original. Useful for export presets:
+ * the live view is briefly redrawn under the preset, snapshotted, and
+ * restored. Returns whatever `fn` returns.
+ *
+ * `redraw` is called once after applying overrides and once after restoring.
+ */
+export function withRenderOverrides(overrides, redraw, fn) {
+  const original = state.render;
+  state.render = renderOptionsWithOverrides(overrides);
+  try {
+    if (typeof redraw === "function") redraw();
+    return fn();
+  } finally {
+    state.render = original;
+    if (typeof redraw === "function") redraw();
+  }
+}
 
 export const LABEL_PAD = 6;
 

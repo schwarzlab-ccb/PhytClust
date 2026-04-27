@@ -27,11 +27,20 @@
 }
 
 .sidebar-section {
-  padding: 16px 18px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--pc-border-subtle);
 }
 .sidebar-section:last-child {
   border-bottom: none;
+}
+/* The first two sections (Tree, Rooting) are the highest-priority controls
+   so we give them slightly more breathing room than the lower-priority ones
+   to anchor the user's eye. */
+.sidebar-section:nth-child(1),
+.sidebar-section:nth-child(2),
+.sidebar-section:nth-child(3) {
+  padding-top: 14px;
+  padding-bottom: 14px;
 }
 
 .section-title {
@@ -58,27 +67,35 @@
 .upload-zone {
   border: 2px dashed var(--pc-border);
   border-radius: var(--pc-radius-md);
-  padding: 20px 14px;
-  text-align: center;
+  padding: 10px 14px;
   cursor: pointer;
   transition: all var(--pc-transition);
   position: relative;
   background: var(--pc-bg);
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .upload-zone:hover,
 .upload-zone.drag-over {
   border-color: var(--pc-accent);
   background: var(--pc-accent-subtle);
 }
+.upload-zone svg {
+  flex-shrink: 0;
+}
+.upload-zone-content {
+  flex: 1;
+  min-width: 0;
+}
 .upload-zone .upload-text {
   font-size: 12px;
   color: var(--pc-text-secondary);
-  margin-top: 6px;
 }
 .upload-zone .upload-hint {
   font-size: 11px;
   color: var(--pc-text-muted);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .upload-zone input[type="file"] {
   position: absolute;
@@ -103,17 +120,53 @@
   font-weight: 500;
   font-size: 12px;
 }
+.file-clear-btn {
+  background: none;
+  border: none;
+  color: var(--pc-text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.file-clear-btn:hover {
+  background: var(--pc-bg-elevated);
+  color: var(--pc-text);
+}
+
+/* ===================== NEWICK PASTE TOGGLE ===================== */
+.newick-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 7px;
+  background: none;
+  border: none;
+  color: var(--pc-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 0;
+  transition: color var(--pc-transition);
+  text-align: left;
+}
+.newick-toggle:hover {
+  color: var(--pc-text-secondary);
+}
+.newick-toggle-chevron {
+  display: inline-block;
+  transition: transform var(--pc-transition);
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.newick-toggle[aria-expanded="true"] .newick-toggle-chevron {
+  transform: rotate(90deg);
+}
 
 /* ===================== NEWICK TEXTAREA ===================== */
 .newick-area {
-  margin-top: 10px;
-}
-.newick-area label {
-  display: block;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--pc-text-secondary);
-  margin-bottom: 5px;
+  margin-top: 6px;
 }
 .newick-area textarea {
   width: 100%;
@@ -156,6 +209,27 @@
   font-size: 11px;
   color: var(--pc-text-muted);
   margin-top: 2px;
+}
+
+/* Compact variant — used in collapsed param panels where vertical space
+   matters more than breathing room. Pairs with smaller inputs and tighter
+   stacking so a section can show 4-5 controls without scrolling. */
+.form-group.compact {
+  margin-bottom: 8px;
+}
+.form-group.compact label {
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+.form-group.compact .form-input {
+  height: 28px;
+  font-size: 12px;
+}
+.form-group.compact .hint,
+.hint.compact {
+  font-size: 10.5px;
+  margin-top: 2px;
+  line-height: 1.3;
 }
 
 .form-input {
@@ -231,10 +305,10 @@ select.form-input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0;
+  padding: 4px 0;
 }
 .toggle-row .toggle-label {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--pc-text-secondary);
 }
 .toggle-switch {
@@ -282,7 +356,7 @@ select.form-input {
   gap: 6px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--pc-accent);
+  color: var(--pc-text-secondary);
   cursor: pointer;
   padding: 2px 0;
   border: none;
@@ -292,7 +366,7 @@ select.form-input {
   transition: color var(--pc-transition);
 }
 .collapse-trigger:hover {
-  color: var(--pc-accent-hover);
+  color: var(--pc-text);
 }
 .collapse-trigger .chevron {
   display: inline-block;
@@ -323,6 +397,23 @@ select.form-input {
 .collapse-body.open {
   display: block;
   animation: fadeInDown 0.15s ease;
+}
+
+/* Sub-section labels inside a collapsible (e.g. inside "Refinement") */
+.collapse-body .subsection-title {
+  margin: 14px 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pc-text-muted);
+  border-top: 1px solid var(--pc-border-subtle);
+  padding-top: 10px;
+}
+.collapse-body .subsection-title:first-child {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
 }
 
 /* ===================== BUTTONS ===================== */

@@ -72,7 +72,7 @@ export function getThemeColors() {
   const themeBranch =
     style.getPropertyValue("--pc-tree-branch").trim() || "#000000";
   return {
-    branch: state.BRANCH_COLOR_OVERRIDE || themeBranch,
+    branch: state.render.branches.color || themeBranch,
     label: style.getPropertyValue("--pc-tree-label").trim() || "#334155",
     internal: style.getPropertyValue("--pc-tree-internal").trim() || "#64748b",
     text: style.getPropertyValue("--pc-text").trim() || "#241b3d",
@@ -83,7 +83,25 @@ export function getThemeColors() {
   };
 }
 
+const THEME_KEY = "phytclust-theme";
+
+function preferredTheme() {
+  // Only honour an explicit user choice. We deliberately ignore the OS
+  // prefers-color-scheme so a user on a dark-mode system still sees the
+  // intended light look until they opt in via the theme toggle.
+  const stored = localStorage.getItem(THEME_KEY);
+  if (stored === "light" || stored === "dark") return stored;
+  return "light";
+}
+
 export function initTheme() {
-  document.documentElement.setAttribute("data-theme", "light");
-  localStorage.removeItem("phytclust-theme");
+  document.documentElement.setAttribute("data-theme", preferredTheme());
+}
+
+export function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  const next = current === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem(THEME_KEY, next);
+  return next;
 }

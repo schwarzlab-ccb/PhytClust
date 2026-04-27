@@ -65,6 +65,81 @@
   max-width: 680px;
 }
 
+/* ===================== KEYBOARD SHORTCUTS MODAL ===================== */
+.modal-shortcuts {
+  max-width: 560px;
+}
+.modal-close-btn {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--pc-text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.modal-close-btn:hover {
+  color: var(--pc-text);
+  background: var(--pc-border-subtle);
+}
+
+.shortcuts-body {
+  padding: 18px 22px 22px;
+  display: grid;
+  gap: 18px;
+}
+.shortcuts-section h4 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pc-text-muted);
+  margin: 0 0 8px;
+}
+.shortcuts-section dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(160px, auto) 1fr;
+  row-gap: 8px;
+  column-gap: 16px;
+  align-items: center;
+}
+.shortcuts-section dt {
+  font-size: 12px;
+  color: var(--pc-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.shortcuts-section dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pc-text);
+}
+.shortcuts-section .kbd-or {
+  color: var(--pc-text-muted);
+  font-size: 11px;
+}
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pc-text);
+  background: var(--pc-bg);
+  border: 1px solid var(--pc-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
 .cluster-editor-controls {
   display: flex;
   align-items: center;
