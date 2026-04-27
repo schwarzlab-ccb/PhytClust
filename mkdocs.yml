@@ -42,6 +42,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - How It Works: concepts.md
+  - Visualisation: visualisation.md
   - Tutorials:
       - CLI End-to-End: tutorials/cli-end-to-end.md
       - Python End-to-End: tutorials/python-end-to-end.md
