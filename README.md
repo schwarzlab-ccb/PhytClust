@@ -33,9 +33,9 @@ phytclust examples/sample_tree.nwk --top-n 3 --save-fig
 phytclust examples/sample_tree.nwk --resolution --bins 4 --save-fig
 ```
 
-## Web GUI
+## Web GUI [beta]
 
-PhytClust ships an experimental browser-based interface for interactive exploration.
+PhytClust comes with an experimental browser-based interface for interactive exploration.
 
 **Install with GUI extras:**
 

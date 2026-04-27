@@ -148,6 +148,21 @@ def test_run_rejects_invalid_argument_combinations():
     with pytest.raises(InvalidKError, match="k must be"):
         pc.run(k=0, plot_scores=False)
 
+
+def test_resolution_after_fixed_k_does_not_inherit_self_k():
+    """Regression: a previous fixed-k run leaves self.k populated, but an
+    explicit by_resolution=True call must override that fallback rather
+    than raising "Cannot combine k with by_resolution=True"."""
+    tree = _load_tree()
+    pc = PhytClust(tree=tree)
+
+    pc.run(k=2, plot_scores=False)
+    assert pc.k == 2  # Sanity: previous run mutated self.k
+
+    # Should run resolution mode cleanly, not error on the lingering self.k.
+    result = pc.run(by_resolution=True, num_bins=2, plot_scores=False)
+    assert result["mode"] == "resolution"
+
     with pytest.raises(InvalidKError, match="`top_n` must be"):
         pc.run(top_n=0, plot_scores=False)
 
