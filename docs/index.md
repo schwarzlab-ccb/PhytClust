@@ -2,59 +2,46 @@
 
 **Tree-aware clustering for rooted phylogenies.**
 
-PhytClust takes a rooted phylogenetic tree and splits its leaves into clusters — with the guarantee that every cluster is a true clade. No post-hoc filtering, no heuristic merging: monophyly is baked into the optimization from the start.
+PhytClust takes a rooted phylogenetic tree and splits its leaves into clusters that are guaranteed to be monophyletic — every cluster is a complete clade. Monophyly isn't a post-hoc filter or a heuristic; it's a constraint the optimisation respects from the start.
 
-The core algorithm is dynamic programming directly on the tree topology. It finds the partition of leaves into *k* groups that minimizes within-cluster branch length, while never breaking monophyly. Because the DP explores the full solution space for a given *k*, the result is exact — not an approximation.
+The core algorithm is dynamic programming directly on the tree topology. It finds the partition of leaves into *k* groups that minimises within-cluster dispersion (the summed leaf-to-MRCA distances), while never breaking monophyly. Because the DP explores the full valid solution space for each *k*, the result is exact — not an approximation, and not sensitive to initial conditions or random seeds.
 
 ---
 
 ## Who is this for?
 
-PhytClust was built for researchers who work with phylogenies and need to group taxa into meaningful clusters — whether for downstream analysis, visualization, or summarizing large trees. Typical use cases:
+PhytClust was built for researchers who work with phylogenies and need to group taxa into meaningful clusters — for downstream analysis, visualisation, or summarising large trees. Concrete examples:
 
-- **Cancer genomics**: grouping clones from tumor phylogenies into subclonal populations
-- **Comparative genomics**: partitioning gene or species trees into coherent groups
-- **Ecology / metagenomics**: summarizing diversity at multiple resolutions
-- **Any tree**: if you have a rooted Newick tree, PhytClust can cluster it
+- Grouping clones from tumour phylogenies into subclonal populations.
+- Partitioning gene or species trees into coherent groups for comparative analysis.
+- Summarising metagenomic diversity at multiple resolutions in one pass.
 
-## What can it do?
+If you have a rooted Newick tree and you want monophyletic clusters out of it, PhytClust is the right tool.
 
-### Three clustering modes
+## What it does
 
-You can tell PhytClust exactly how many clusters you want, or let it figure that out for you:
+You can run PhytClust in three ways depending on how much you already know about the tree:
 
-- **Exact *k***: "Give me exactly 5 clusters." Useful when biology or a downstream pipeline dictates the number.
-- **Global peak search**: "Find the best *k* values." PhytClust computes a score curve over all possible *k* and picks the most prominent peaks — the *k* values where the tree has natural breakpoints.
-- **Multi-resolution**: "Show me the tree at different granularities." Returns one representative *k* per logarithmic bin, so you get a coarse-to-fine panel in a single run.
+- **Exact *k*** — "Give me exactly 5 clusters." When biology or a downstream pipeline already dictates the number.
+- **Global peak search** — "Find the best *k* values." PhytClust scores every *k* in range and picks out the values where the tree has natural breakpoints. The output is the top *N* *k* values ranked by how prominent each one is.
+- **Multi-resolution** — "Show me the tree at several scales." Splits the *k* range into logarithmic bins and returns one representative *k* per bin, giving you a coarse-to-fine panel from a single run.
 
-### Practical controls
+Real trees are messy, so PhytClust also handles the standard headaches: minimum cluster size as a hard constraint, optional outlier marking for tiny noise clusters, native support for polytomies (no need to resolve them beforehand), an opt-in guard against splitting at zero-length branches, and outgroup / midpoint rooting on the fly.
 
-Real trees are messy. PhytClust handles the common headaches:
+There are three ways to talk to it: a **CLI** for quick runs and shell pipelines, a **Python API** for notebooks and batch processing, and an experimental **web GUI** for interactive exploration in the browser.
 
-- **Minimum cluster size** — hard constraint so you don't get singleton noise
-- **Outlier handling** — small clusters can be flagged as outliers, with optional preference for fewer outlier groups
-- **Polytomies** — native support for multifurcations (hard or soft mode), no need to resolve them beforehand
-- **Zero-length edges** — optional guard against splitting clades joined by zero-length branches
-- **Outgroups and rooting** — exclude an outgroup taxon or re-root on the fly
+### What you get out
 
-### Three interfaces
-
-- **CLI** — one command, immediate results. Good for quick runs and shell pipelines.
-- **Python API** — full programmatic control for notebooks, batch pipelines, and custom analysis.
-- **Web GUI** (experimental) — paste a Newick string and explore clusters interactively in the browser.
-
-### Publication-ready output
-
-Every run can produce:
+A normal run produces:
 
 | File | What it is |
 |------|-----------|
 | `phytclust_results.tsv` | Leaf-to-cluster assignments (one or multiple *k* values) |
 | `scores.png` | Score curve with annotated peaks |
-| `tree_k{K}.png` | Colored tree for each selected *k* |
+| `tree_k{K}.png` | Coloured tree for each selected *k* |
 | `peaks_by_rank.txt` | Selected *k* values in rank order |
 
-Plots use a colorblind-safe palette and are configurable down to font sizes, marker sizes, and axis scales.
+Plots use a colourblind-safe palette and are configurable down to font sizes, marker sizes, and axis scales.
 
 ---
 

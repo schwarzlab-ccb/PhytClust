@@ -18,11 +18,27 @@ Think of the tree as a branching structure where each internal edge is a potenti
 
 Not every combination of cuts produces monophyletic clusters — you need the cuts to be *consistent*. PhytClust's dynamic programming guarantees this by working bottom-up through the tree, so it only ever considers valid partitions.
 
-## The objective: minimize within-cluster branch length
+## The objective: minimize within-cluster dispersion
 
-Given a valid partition, PhytClust measures quality by summing up the branch lengths *within* each cluster. Shorter within-cluster branches mean tighter, more cohesive groups. The DP finds the partition that minimizes this total for a given *k*.
+Given a valid partition, PhytClust scores it by adding up, for every cluster, **how far each member is from its cluster's MRCA**. The MRCA (most recent common ancestor) is the deepest node that contains every leaf of the cluster — think of it as the cluster's centre of mass on the tree. Shorter average distance to the MRCA means a tighter, more cohesive group.
 
-Intuitively: long branches between clusters (where the cuts happen) are good — they separate well-differentiated lineages. Short branches within clusters are good — they keep similar taxa together.
+Intuitively: long branches *between* clusters (where the cuts land) are good — they separate well-differentiated lineages. Short distances *within* a cluster are good — they keep similar taxa together.
+
+### Why distance-to-MRCA, not something else?
+
+It's worth being precise about what gets summed, because there are several reasonable-sounding alternatives and the choice has consequences.
+
+Take a cluster with three leaves: A, B, C. Three plausible cost definitions:
+
+1. **Sum of every internal branch in the cluster's subtree.** Simple, but it ignores which leaves are present. Two clusters with the same skeleton but different membership would score identically.
+2. **Sum of pairwise distances between members.** Faithful to the "spread out" intuition, but it scales as O(*n*²) per cluster and doesn't decompose neatly when you walk up the tree.
+3. **Sum of leaf-to-MRCA distances** (what PhytClust uses). Each leaf contributes the length of its path up to the MRCA.
+
+The third option has a property the others don't: it factors recursively. When you extend a cluster up by one branch — say you decide to merge it with its sibling at the parent — the new cost is just the old cost plus `(branch length) × (number of leaves in the cluster)`. Every leaf below the new branch picks up that branch's length once.
+
+That's exactly the recurrence the DP uses, and it's why the algorithm runs in O(*n* · *k*²) instead of something cubic. Pairwise distance would force a more expensive update at every node; subtree-sum would lose track of membership.
+
+There's also a clean interpretation: minimising the sum of leaf-to-MRCA distances is equivalent to minimising **average dispersion around the cluster's centre on the tree**. It's the closest tree-aware analogue to "within-cluster sum of squares" in flat clustering.
 
 ## Dynamic programming on the tree
 
@@ -48,15 +64,34 @@ By default, PhytClust uses "adjusted" ranking, which accounts for how the number
 
 ## Polytomies
 
-A polytomy (multifurcation) is an internal node with more than two children. They're common in real trees — either because the true branching order is unresolved, or because multiple speciation events happened in rapid succession.
+A polytomy is an internal node with more than two children. They show up everywhere in real phylogenies, for two very different reasons:
 
-PhytClust handles polytomies in two ways:
+- **Soft polytomies** — the data couldn't resolve the branching order, so an inference tool collapsed an uncertain bifurcation. The "true" tree is binary, you just can't see it.
+- **Hard polytomies** — multiple lineages genuinely diverged in rapid succession (rapid radiation, gene duplication bursts), and there is no internal binary structure to recover.
 
-- **Hard mode** (default): each child of a polytomy goes entirely into one cluster. This is fast and deterministic — the DP just has more children to allocate at that node.
+The clustering decision at a polytomy is not obvious. Picture a node with five children:
 
-- **Soft mode**: children can be partially merged across clusters. This is more flexible but computationally expensive — the number of possible allocations grows exponentially with the node's degree. A safety guardrail (`soft_polytomy_max_degree`, default 18) falls back to hard mode for very high-degree nodes.
+```
+          ┌── A
+          ├── B
+   ┌──────┤
+───┤      ├── C
+   │      ├── D
+   │      └── E
+   └── F
+```
 
-For most trees, hard mode works well. Soft mode is worth trying when you have moderate-degree polytomies (say, 5-15 children) and suspect that the hard constraint is forcing unnatural groupings.
+If you want to keep that node's subtree as two clusters, where do you draw the line? `{A,B}` and `{C,D,E}`? `{A}` and `{B,C,D,E}`? Any of those? The tree itself doesn't tell you; the polytomy is by definition *unresolved* about that ordering.
+
+PhytClust gives you two strategies:
+
+**Hard mode** (default). Each child of the polytomy goes entirely into one cluster — no child is split between two clusters. The DP just has more children to allocate at the polytomy node, which is still tractable. With five children you have at most a handful of partitions to enumerate per `k`.
+
+**Soft mode** (`--optimize-polytomies`). The DP is allowed to merge any subset of the polytomy's children into the same cluster, including subsets that wouldn't be a clade in any binary resolution. This is strictly more expressive — it can find clusterings that hard mode cannot represent — but the search space is the set of partitions of the children, which grows like the Bell number of the child count. A node with 12 children has roughly 4 million ways to partition its children; a node with 18 has about 10 billion. PhytClust falls back to hard mode automatically once the degree crosses `soft_polytomy_max_degree` (default 18).
+
+When does soft mode actually matter? Take the example above. Suppose the branch leading to `{A,B,C,D,E}` is short, but within that group, `A` and `F` are biologically similar. Hard mode forces you to choose: either `A` is in the same cluster as `B,C,D,E` or in the same cluster as `F` — never both. Soft mode lets the DP put `A` with `F` and leave `{B,C,D,E}` together, by treating the polytomy as if it were resolved into `((F, A), (B,C,D,E))` for the purposes of clustering, even though no such bifurcation appears in the input.
+
+In practice: hard mode is the right default. Try soft mode if you have polytomies of moderate degree (5–15) and the resulting clusters look forced.
 
 ## Outlier handling
 
@@ -68,18 +103,31 @@ Small clusters are a fact of life in real phylogenies — isolated taxa on long 
 
 ## Zero-length edges
 
-Some trees have internal edges of length zero — typically from collapsing poorly-supported nodes or from identical sequences. By default, PhytClust treats these like any other edge and may split at them if the DP says so.
+Some internal branches in a phylogeny have length zero. There are a couple of common reasons:
 
-With `--no-split-zero-length`, the DP is forbidden from cutting at zero-length edges. This keeps groups of near-identical taxa together, which makes sense when the zero-length branch has no biological meaning.
+- **Identical sequences.** If two leaves have no observed substitutions between them, the inference produces a branch of length zero somewhere in their lineage. Biologically the two leaves are indistinguishable; the zero-length edge is real but uninformative for clustering.
+- **Collapsed weakly-supported nodes.** Some tools collapse low-support edges to zero length so downstream consumers treat them as polytomies. The branch is there topologically but has no claim to representing actual evolutionary distance.
+
+Either way, splitting at a zero-length edge is *free* under the default objective — cutting there costs nothing, because the branch itself contributes zero. So the DP will happily put two identical sequences into separate clusters if it shaves a fraction off the cost elsewhere.
+
+That's almost always wrong. If the data can't tell `A` and `A'` apart, neither should the clustering. Putting them in different groups is a numerical artefact, not a biological signal.
+
+`--no-split-zero-length` forbids the DP from placing a cluster boundary on a zero-length edge. Identical-sequence neighbours stay together. Think of it as the cluster equivalent of "don't break a tie by coin flip" — if the tree is genuinely undecided about whether two taxa are distinct, don't pretend you know.
+
+Two practical notes:
+
+- The flag uses a small numerical tolerance (`zero_length_eps`, default `1e-12`) so trees with floating-point noise still behave correctly.
+- If a polytomy sits at the bottom of an all-zero subtree, no-split-zero-length effectively keeps that whole subtree as one cluster. That's intentional: the subtree contains no information about how to split it.
 
 ## Summary
 
 | Concept | What it means in PhytClust |
 |---------|---------------------------|
 | **Monophyly** | Every cluster is a complete clade — guaranteed, not post-hoc filtered |
-| **Objective** | Minimize total within-cluster branch length |
+| **Objective** | Minimise total leaf-to-MRCA distance within clusters (decomposes recursively, unlike pairwise distance) |
 | **DP** | Exact bottom-up algorithm on the tree; visits each node once |
 | **Score curve** | Cost vs. *k*; peaks indicate natural cluster boundaries |
 | **Peak ranking** | Prominence-based, with optional outlier adjustment |
-| **Polytomies** | Hard mode (fast, per-child) or soft mode (flexible, exponential) |
+| **Polytomies** | Hard mode keeps each child in one cluster; soft mode allows arbitrary subsets at the cost of exponential blow-up |
 | **Outliers** | Hard constraint (min size) or soft marking (threshold + preference) |
+| **Zero-length edges** | Optional flag to forbid cuts where the branch carries no information |
