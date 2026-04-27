@@ -1,6 +1,7 @@
 # src/phytclust/gui/api.py
 
 import logging
+import math
 import os
 import tempfile
 import uuid
@@ -183,6 +184,17 @@ def _leaf_key_to_name(x: Any) -> str:
     return str(x)
 
 
+def _safe_float(v) -> float | None:
+    """Return a JSON-safe float, converting nan/inf → None."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def _serialize_clusters(raw_clusters: Any) -> list[dict[str, int]]:
     out: list[dict[str, int]] = []
 
@@ -257,6 +269,12 @@ def run_phytclust(req: PhytclustRequest):
     ):
         pc = LAST_PC
         pc.compute_all_clusters = req.compute_all_clusters
+        # A previous fixed-k run leaves pc.k populated; PhytClust._run_inner
+        # falls back to self.k when k=None is passed, which would then collide
+        # with by_resolution=True on the next run. Reset run-mode state on
+        # reuse so this run's mode is what actually takes effect.
+        if mode != "k":
+            pc.k = None
         notes.append("Reusing previous PhytClust instance.")
     else:
         try:
@@ -383,7 +401,7 @@ def run_phytclust(req: PhytclustRequest):
                 info = cluster_alpha(active_tree, pc.clusters[kv])
                 cached = {"k": int(kv), **info}
                 pc.alpha_by_k[int(kv)] = cached
-            all_alphas.append(float(cached["alpha"]))
+            all_alphas.append(_safe_float(cached["alpha"]))
 
     alpha_details = result.get("alpha_details") or []
     alphas = result.get("alphas") or []
@@ -395,9 +413,9 @@ def run_phytclust(req: PhytclustRequest):
         "k": result.get("k"),
         "ks": result.get("ks"),
         "peaks": result.get("peaks"),
-        "alphas": [float(a) for a in alphas],
+        "alphas": [_safe_float(a) for a in alphas],
         "alpha_details": [
-            {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in d.items()}
+            {k: (_safe_float(v) if isinstance(v, (int, float)) else v) for k, v in d.items()}
             for d in alpha_details
         ],
         "outgroup": result.get("outgroup"),
