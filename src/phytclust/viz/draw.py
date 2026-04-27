@@ -103,10 +103,21 @@ def plot_tree(
     hide_internal_nodes: bool = True,
     marker_size: Optional[int] = None,
     line_width: Optional[float] = None,
+    layout: str = "rectangular",
+    branch_color_func: Optional[Callable[[Any], Any]] = None,
+    show_branch_axis: bool = True,
     **kwargs: Any,
 ) -> plt.Figure:
     """
     Minimal, fast Matplotlib phylogram for Bio.Phylo trees.
+
+    layout : "rectangular" (default, x = cumulative branch length) or
+             "cladogram" (x = depth; every leaf aligns at the right edge).
+    branch_color_func : callable(clade) → matplotlib color. Lets the caller
+             paint each parent→clade edge by cluster, support, etc.
+    show_branch_axis : whether to draw the bottom x-axis (auto-disabled for
+             cladogram since the axis has no biological meaning there).
+
     Returns a matplotlib Figure.
     """
     marker_size = marker_size or SIZES["tree_marker"]
@@ -171,9 +182,19 @@ def plot_tree(
     ax.axes.get_yaxis().set_visible(False)
     for spine in ("right", "left", "top"):
         ax.spines[spine].set_visible(False)
-    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True, prune=None))
-    ax.xaxis.set_tick_params(labelsize=SIZES["xlabel_tick"])
-    ax.xaxis.label.set_size(SIZES["xlabel_font"])
+    is_cladogram = layout == "cladogram"
+    if is_cladogram or not show_branch_axis:
+        # Cladograms place every leaf at the same depth; the x-axis carries
+        # no biological meaning. Hide spine, ticks, and label.
+        ax.spines["bottom"].set_visible(False)
+        ax.axes.get_xaxis().set_visible(False)
+    else:
+        # Branch-length axis: AutoLocator gives sensible ticks for any scale,
+        # whereas the previous integer locator hid sub-unit branch lengths.
+        ax.xaxis.set_major_locator(mpl.ticker.AutoLocator())
+        ax.xaxis.set_minor_locator(mpl.ticker.AutoMinorLocator())
+        ax.xaxis.set_tick_params(labelsize=SIZES["xlabel_tick"])
+        ax.xaxis.label.set_size(SIZES["xlabel_font"])
     ax.set_title(
         title,
         x=0.01,
@@ -185,7 +206,7 @@ def plot_tree(
         zorder=10,
     )
 
-    x_posns = _get_x_positions(input_tree)
+    x_posns = _get_x_positions(input_tree, layout=layout)
     y_posns = _get_y_positions(
         input_tree, adjust=not hide_internal_nodes, outgroup=outgroup
     )
@@ -233,13 +254,23 @@ def plot_tree(
         if hasattr(clade, "width") and clade.width is not None:
             lw = float(clade.width) * float(plt.rcParams["lines.linewidth"])
 
+        # Per-branch colouring (e.g. by cluster) overrides inherited color.
+        edge_color = color
+        if branch_color_func is not None:
+            try:
+                bc = branch_color_func(clade)
+                if bc is not None:
+                    edge_color = bc
+            except Exception:
+                pass
+
         draw_clade_lines(
             use_linecollection=True,
             orientation="horizontal",
             y_here=y_here,
             x_start=x_start,
             x_here=x_here,
-            color=color,
+            color=edge_color,
             lw=lw,
         )
 
@@ -270,17 +301,22 @@ def plot_tree(
         if clade.clades:
             y_top = y_posns.get(clade.clades[0], y_here)
             y_bot = y_posns.get(clade.clades[-1], y_here)
+            # Vertical line at clade represents clade's internal structure
+            # (it joins clade's children). When branches are coloured by
+            # cluster, this line should match the horizontal entering clade
+            # — otherwise sub-cluster verticals stay grey while the
+            # horizontals are coloured, which looks broken.
             draw_clade_lines(
                 use_linecollection=True,
                 orientation="vertical",
                 x_here=x_here,
                 y_bot=y_bot,
                 y_top=y_top,
-                color=color,
+                color=edge_color,
                 lw=lw,
             )
             for child in clade:
-                draw_clade(child, x_here, color, lw)
+                draw_clade(child, x_here, edge_color, lw)
 
     line_width = float(
         line_width if line_width is not None else plt.rcParams["lines.linewidth"]
@@ -304,7 +340,8 @@ def plot_tree(
     for x, y, text, color in zip(text_x, text_y, texts, text_colors):
         ax.text(x, y, text, va="center", color=color)
 
-    ax.set_xlabel("branch length")
+    if not is_cladogram and show_branch_axis:
+        ax.set_xlabel("branch length")
     ax.set_ylabel("taxa")
 
     # pass-through pyplot ops, e.g. axvline={'x':...}
@@ -322,20 +359,38 @@ def plot_tree(
     return fig
 
 
-def _get_x_positions(tree: Any) -> dict[Any, float]:
+def _get_x_positions(
+    tree: Any,
+    layout: str = "rectangular",
+) -> dict[Any, float]:
     """
-    Get x-coordinates for tree nodes based on branch lengths.
+    Get x-coordinates for tree nodes.
 
-    Parameters
-    ----------
-    tree : Bio.Phylo.BaseTree.Tree
-        The phylogenetic tree.
-
-    Returns
-    -------
-    dict[Any, float]
-        Mapping of clade objects to x-coordinates (branch lengths from root).
+    layout="rectangular" (default) — x = cumulative branch length (phylogram).
+    layout="cladogram" — x = topological depth, with every leaf at max depth so
+                         leaves align at the right edge.
     """
+    if layout == "cladogram":
+        # Compute topological depth, then push leaves out to max_depth so the
+        # right edge is flush. Mirrors d3.cluster's behaviour in the GUI.
+        depth: dict[Any, int] = {tree.root: 0}
+        leaves: list = []
+        for clade in tree.find_clades(order="preorder"):
+            d = depth[clade]
+            if not clade.clades:
+                leaves.append(clade)
+            for child in clade.clades:
+                depth[child] = d + 1
+        max_depth = max(depth.values()) if depth else 1
+        if max_depth == 0:
+            max_depth = 1
+        positions: dict[Any, float] = {
+            n: float(d) / max_depth for n, d in depth.items()
+        }
+        for leaf in leaves:
+            positions[leaf] = 1.0
+        return positions
+
     depths = tree.depths()
     if not depths or not max(depths.values()):
         depths = tree.depths(unit_branch_lengths=True)
@@ -406,6 +461,185 @@ def _get_y_positions(
         heights = new_heights
 
     return heights
+
+
+def _draw_cluster_boxes(
+    ax: plt.Axes,
+    tree: Any,
+    cluster: dict[Any, int],
+    cluster_to_color: dict[int, Any],
+    *,
+    outgroup: Optional[str],
+    hide_internal_nodes: bool,
+    layout: str = "rectangular",
+    box_alpha: float = 0.18,
+    box_pad_y: float = 0.4,
+    box_pad_x_frac: float = 0.01,
+    show_labels: bool = True,
+) -> None:
+    """Draw a translucent rectangle per cluster, rooted at the cluster's
+    MRCA and extending to the right edge of the leaf positions. Mirrors
+    the GUI's "boxes (MRCA)" cluster colour mode.
+    """
+    leaves = [
+        c for c in tree.get_terminals()
+        if outgroup is None or getattr(c, "name", None) != outgroup
+    ]
+    if not leaves:
+        return
+
+    x_posns = _get_x_positions(tree, layout=layout)
+    y_posns = _get_y_positions(
+        tree, adjust=not hide_internal_nodes, outgroup=outgroup
+    )
+    xmax = max(x_posns.values()) if x_posns else 1.0
+
+    # Group leaves by cluster id.
+    clusters_by_id: dict[int, list] = {}
+    for leaf in leaves:
+        cid = cluster.get(leaf)
+        if cid is None:
+            continue
+        clusters_by_id.setdefault(int(cid), []).append(leaf)
+
+    pad_x = xmax * box_pad_x_frac
+    label_extent = xmax * 0.06
+
+    for cid, members in clusters_by_id.items():
+        if cid < 0:
+            # Outliers — drawn as dashed-edge open boxes for visual distinction.
+            colour = cluster_to_color.get(cid, "#888888")
+            outlier = True
+        else:
+            colour = cluster_to_color.get(cid)
+            outlier = False
+        if colour is None:
+            continue
+
+        ys = [y_posns.get(m, 0.0) for m in members]
+        if not ys:
+            continue
+        y_min = min(ys) - box_pad_y
+        y_max = max(ys) + box_pad_y
+
+        if len(members) == 1:
+            mrca = members[0]
+        else:
+            try:
+                mrca = tree.common_ancestor(members)
+            except Exception:
+                mrca = members[0]
+        x_left = x_posns.get(mrca, 0.0) - pad_x
+        x_right = max(x_posns.get(m, 0.0) for m in members) + label_extent
+
+        rect = plt.Rectangle(
+            (x_left, y_min),
+            x_right - x_left,
+            y_max - y_min,
+            facecolor="none" if outlier else colour,
+            edgecolor=colour,
+            linewidth=1.2,
+            linestyle="--" if outlier else "-",
+            alpha=box_alpha if not outlier else max(box_alpha * 2, 0.4),
+            zorder=1,
+        )
+        ax.add_patch(rect)
+
+        if show_labels:
+            ax.text(
+                x_right + xmax * 0.005,
+                (y_min + y_max) / 2,
+                "outlier" if outlier else f"C{cid}",
+                fontsize=7,
+                fontweight="600",
+                color=colour,
+                style="italic" if outlier else "normal",
+                va="center",
+                ha="left",
+                clip_on=False,
+            )
+
+
+def _draw_cluster_bars(
+    ax: plt.Axes,
+    tree: Any,
+    cluster: dict[Any, int],
+    cluster_to_color: dict[int, Any],
+    *,
+    outgroup: Optional[str],
+    hide_internal_nodes: bool,
+    layout: str = "rectangular",
+    bar_width_frac: float = 0.04,
+    bar_alpha: float = 0.85,
+) -> None:
+    """Append a column of coloured rectangles to the right of leaf labels.
+
+    Mirrors the GUI's "side bars" cluster colour mode. Runs of consecutive
+    same-cluster leaves merge into a single rectangle so adjacent leaves of
+    the same cluster don't show as separate stripes.
+    """
+    leaves = [
+        c for c in tree.get_terminals()
+        if outgroup is None or getattr(c, "name", None) != outgroup
+    ]
+    if not leaves:
+        return
+
+    y_posns = _get_y_positions(
+        tree, adjust=not hide_internal_nodes, outgroup=outgroup
+    )
+    leaves.sort(key=lambda c: y_posns.get(c, 0))
+
+    cur_xlim = ax.get_xlim()
+    xmax = cur_xlim[1]
+    if not np.isfinite(xmax) or xmax <= 0:
+        return
+
+    # Place bars past the longest leaf label. The label-width estimate
+    # mirrors plot_tree's text positioning (no exact measurement needed —
+    # axes are autoscaled, and we extend xlim afterwards).
+    longest = max(
+        (len(str(getattr(c, "name", "") or "")) for c in leaves),
+        default=10,
+    )
+    label_pad = xmax * 0.02
+    label_extent = max(xmax * 0.06, longest * xmax * 0.012)
+    bar_x = xmax + label_pad + label_extent
+    bar_w = max(xmax * bar_width_frac, xmax * 0.02)
+
+    ys = np.array([y_posns[c] for c in leaves], dtype=float)
+    n = len(ys)
+    if n == 1:
+        bounds = np.array([ys[0] - 0.5, ys[0] + 0.5])
+    else:
+        bounds = np.empty(n + 1)
+        bounds[1:-1] = (ys[:-1] + ys[1:]) / 2
+        bounds[0] = ys[0] - (bounds[1] - ys[0])
+        bounds[-1] = ys[-1] + (ys[-1] - bounds[-2])
+
+    cids = [cluster.get(c) for c in leaves]
+    run_start = 0
+    run_cid = cids[0]
+    for i in range(1, n + 1):
+        cid = cids[i] if i < n else object()
+        if cid != run_cid:
+            if run_cid is not None:
+                colour = cluster_to_color.get(int(run_cid))
+                if colour is not None:
+                    ax.add_patch(plt.Rectangle(
+                        (bar_x, bounds[run_start]),
+                        bar_w,
+                        bounds[i] - bounds[run_start],
+                        facecolor=colour,
+                        edgecolor="none",
+                        alpha=bar_alpha,
+                        zorder=2,
+                        clip_on=False,
+                    ))
+            run_start = i
+            run_cid = cid
+
+    ax.set_xlim(cur_xlim[0], bar_x + bar_w * 1.5)
 
 
 def plot_peaks(
@@ -517,6 +751,16 @@ def plot_cluster(
     marker_size: int = 50,
     outgroup: str | None = None,
     scores: list[float] | np.ndarray | None = None,
+    show_cluster_bars: bool = False,
+    cluster_bar_width: float = 0.04,
+    cluster_bar_alpha: float = 0.85,
+    show_cluster_boxes: bool = False,
+    cluster_box_alpha: float = 0.18,
+    show_cluster_box_labels: bool = True,
+    colour_branches_by_cluster: bool = False,
+    layout: str = "rectangular",
+    palette: list | None = None,
+    show_branch_axis: bool = True,
     **kwargs: Any,
 ) -> plt.Figure:
     """
@@ -568,33 +812,36 @@ def plot_cluster(
         The created figure object.
     """
     n_unique = len(set(cluster.values()))
-    if isinstance(cmap, str) and cmap == "phytclust":
+    # Caller-supplied palette wins; otherwise fall back to the cmap argument.
+    if palette is not None:
+        resolved_palette = list(palette)
+    elif isinstance(cmap, str) and cmap == "phytclust":
         from .palette import expand_palette
 
-        palette = expand_palette(max(n_unique, 8))
+        resolved_palette = expand_palette(max(n_unique, 8))
     elif isinstance(cmap, str):
         cmap_obj = plt.get_cmap(cmap)
-        palette = list(
+        resolved_palette = list(
             cmap_obj.colors
             if hasattr(cmap_obj, "colors")
             else cmap_obj(np.linspace(0, 1, getattr(cmap_obj, "N", 20)))
         )
     else:
-        palette = list(
+        resolved_palette = list(
             cmap.colors
             if hasattr(cmap, "colors")
             else cmap(np.linspace(0, 1, getattr(cmap, "N", 20)))
         )
 
     # Ensure we never repeat colors: extend palette if needed
-    if n_unique > len(palette):
+    if n_unique > len(resolved_palette):
         from .palette import expand_palette
 
-        palette = expand_palette(n_unique)
+        resolved_palette = expand_palette(n_unique)
 
-    # Keep RGBA channels (including alpha) and map actual cluster IDs to unique
-    # palette indices. This avoids modulo collisions for sparse/non-contiguous IDs.
-    palette = [tuple(col[:4]) for col in palette]
+    # Normalize every entry to a plain RGBA tuple. mcolors.to_rgba handles
+    # hex strings, named colours, RGB/RGBA tuples, and numpy arrays.
+    palette = [mcolors.to_rgba(col) for col in resolved_palette]
 
     ids = np.fromiter(cluster.values(), dtype=int)
     unique_ids = sorted(set(int(v) for v in ids.tolist()))
@@ -620,10 +867,46 @@ def plot_cluster(
         except Exception:
             title = f"clusters={n_clusters}"
 
+    cluster_to_color = {
+        int(cid): palette[id_to_idx[int(cid)] % len(palette)]
+        for cid in unique_ids
+    }
+
+    branch_color_func: Optional[Callable[[Any], Any]] = None
+    if colour_branches_by_cluster:
+        # Cache per-clade representative cluster id (None if leaves under
+        # this clade are split across clusters). Compute bottom-up.
+        rep: dict[Any, Optional[int]] = {}
+        for clade in tree.find_clades(order="postorder"):
+            if not clade.clades:
+                rep[clade] = cluster.get(clade)
+                continue
+            child_reps = [rep.get(c) for c in clade.clades]
+            if any(r is None for r in child_reps):
+                rep[clade] = None
+            elif all(r == child_reps[0] for r in child_reps):
+                rep[clade] = child_reps[0]
+            else:
+                rep[clade] = None
+        default_branch_color = "#888888"
+
+        def _resolve_branch_color(clade: Any) -> Any:
+            r = rep.get(clade)
+            if r is None or int(r) < 0:
+                return default_branch_color
+            return cluster_to_color.get(int(r), default_branch_color)
+
+        branch_color_func = _resolve_branch_color
+
+    # When side bars are showing, they already encode each leaf's cluster.
+    # Colouring the leaf markers / labels by cluster on top of that is
+    # redundant and visually noisy — leave the leaves at default colour.
+    effective_label_colors = None if show_cluster_bars else clumap
+
     fig = plot_tree(
         tree,
         title=title,
-        label_colors=clumap,
+        label_colors=effective_label_colors,
         hide_internal_nodes=hide_internal_nodes,
         show_terminal_labels=show_terminal_labels,
         width_scale=width_scale,
@@ -632,8 +915,37 @@ def plot_cluster(
         show_branch_lengths=show_branch_lengths,
         marker_size=marker_size,
         outgroup=outgroup,
+        layout=layout,
+        branch_color_func=branch_color_func,
+        show_branch_axis=show_branch_axis,
         **kwargs,
     )
+
+    if show_cluster_boxes:
+        _draw_cluster_boxes(
+            fig.axes[0],
+            tree,
+            cluster,
+            cluster_to_color,
+            outgroup=outgroup,
+            hide_internal_nodes=hide_internal_nodes,
+            layout=layout,
+            box_alpha=cluster_box_alpha,
+            show_labels=show_cluster_box_labels,
+        )
+
+    if show_cluster_bars:
+        _draw_cluster_bars(
+            fig.axes[0],
+            tree,
+            cluster,
+            cluster_to_color,
+            outgroup=outgroup,
+            hide_internal_nodes=hide_internal_nodes,
+            layout=layout,
+            bar_width_frac=cluster_bar_width,
+            bar_alpha=cluster_bar_alpha,
+        )
 
     if save:
         results_dir = results_dir or "."

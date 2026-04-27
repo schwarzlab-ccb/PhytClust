@@ -76,6 +76,12 @@ def plot_clusters(
     label_func: Optional[Callable[[Any], Tuple[float, str]]] = None,
     show_branch_lengths: bool = False,
     marker_size: int = 40,
+    show_cluster_bars: bool = False,
+    show_cluster_boxes: bool = False,
+    colour_branches_by_cluster: bool = False,
+    layout: str = "rectangular",
+    palette: Optional[List] = None,
+    show_branch_axis: bool = True,
     **kwargs,
 ) -> None:
     if pc.clusters is None:
@@ -108,6 +114,12 @@ def plot_clusters(
             marker_size=marker_size,
             outgroup=pc.outgroup,
             results_dir=None,
+            show_cluster_bars=show_cluster_bars,
+            show_cluster_boxes=show_cluster_boxes,
+            colour_branches_by_cluster=colour_branches_by_cluster,
+            layout=layout,
+            palette=palette,
+            show_branch_axis=show_branch_axis,
             **kwargs,
         )
 

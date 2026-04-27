@@ -59,15 +59,23 @@ def prepare_tree(pc) -> None:
     else:
         logger.debug("Tree is fully bifurcating (no polytomies).")
 
-    pc.name_leaves_per_node = {n: n.get_terminals() for n in pc.tree.find_clades()}
+    # Single postorder pass: build terminal lists and counts together.
+    # n.get_terminals() per node would re-walk each subtree (O(N · depth));
+    # extending children's lists bottom-up is O(N).
+    pc.name_leaves_per_node = {}
     pc.num_leaves_per_node = {}
     for n in pc.tree.find_clades(order="postorder"):
         if n.is_terminal():
+            pc.name_leaves_per_node[n] = [n]
             pc.num_leaves_per_node[n] = 1
         else:
-            pc.num_leaves_per_node[n] = sum(
-                pc.num_leaves_per_node[child] for child in n.clades
-            )
+            terms: list = []
+            cnt = 0
+            for child in n.clades:
+                terms.extend(pc.name_leaves_per_node[child])
+                cnt += pc.num_leaves_per_node[child]
+            pc.name_leaves_per_node[n] = terms
+            pc.num_leaves_per_node[n] = cnt
     root_cnt = pc.num_leaves_per_node[pc.tree.root]
     pc.num_terminals = root_cnt - 1 if pc.outgroup else root_cnt
     pc.max_k = (
@@ -78,9 +86,20 @@ def prepare_tree(pc) -> None:
 
     pc._tree_wo_outgroup = None
     if pc.outgroup:
-        import copy
+        # Newick round-trip is much faster than copy.deepcopy on large trees
+        # (deepcopy walks every Bio.Phylo node and cross-reference). Falls
+        # back to deepcopy if anything in the tree fails to serialize.
+        try:
+            from io import StringIO
+            from Bio import Phylo as _Phylo
 
-        pc._tree_wo_outgroup = copy.deepcopy(pc.tree)
+            buf = StringIO()
+            _Phylo.write(pc.tree, buf, "newick")
+            buf.seek(0)
+            pc._tree_wo_outgroup = _Phylo.read(buf, "newick")
+        except Exception:
+            import copy
+            pc._tree_wo_outgroup = copy.deepcopy(pc.tree)
         pc.name_leaves_per_node, pc.num_leaves_per_node = prune_outgroup(
             pc._tree_wo_outgroup, pc.outgroup
         )

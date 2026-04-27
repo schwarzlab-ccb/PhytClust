@@ -138,18 +138,38 @@ def compute_polytomy_dp_hard(
 
         # Note: new_raw[0] stays inf, because with >1 child we do not allow
         # a proper subset of children to be merged in hard mode.
+        prefix_len = len(prefix_raw)
+        child_len = len(child_raw)
+
         for k in range(1, n_new_states + 1):
+            max_i = min(k - 1, prefix_len - 1)
+            min_i = max(0, k - 1 - (child_len - 1))
+            if min_i > max_i:
+                continue
+
+            # Fast path: no outlier handling. Mirrors the binary-node fast
+            # path in dp.py — fused add + argmin, ~4-6x faster per
+            # iteration than the previous Python loop.
+            if not use_outlier:
+                left_slice = prefix_raw[min_i:max_i + 1]
+                right_slice = child_raw[k - 1 - max_i:k - min_i][::-1]
+                raw_scores = left_slice + right_slice
+                best_local = int(raw_scores.argmin())
+                best_value = raw_scores[best_local]
+                if not np.isfinite(best_value):
+                    continue
+                new_raw[k] = best_value
+                step_bp[k] = min_i + best_local
+                continue
+
+            # Outlier-aware path (unchanged semantics).
             best_raw = np.inf
-            best_ns = np.iinfo(np.int32).max if use_outlier else 0
+            best_ns = np.iinfo(np.int32).max
             best_i = -1
-
-            max_i = min(k - 1, len(prefix_raw) - 1)
-            min_i = max(0, k - 1 - (len(child_raw) - 1))
-
             for i in range(min_i, max_i + 1):
                 j = k - 1 - i
                 cand_raw = prefix_raw[i] + child_raw[j]
-                cand_ns = int(prefix_ns[i] + child_ns[j]) if use_outlier else 0
+                cand_ns = int(prefix_ns[i] + child_ns[j])
 
                 if state_better(
                     cand_raw,
@@ -165,7 +185,7 @@ def compute_polytomy_dp_hard(
 
             new_raw[k] = best_raw
             step_bp[k] = best_i
-            if use_outlier and best_i >= 0:
+            if best_i >= 0:
                 new_ns[k] = best_ns
 
         steps.append(step_bp)

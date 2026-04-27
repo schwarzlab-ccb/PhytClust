@@ -587,7 +587,13 @@ class PhytClust:
         plot_scores: bool,
         peak_config: Optional[PeakConfig],
     ) -> dict[str, Any]:
-        k_val = k if k is not None else self.k
+        # If the caller explicitly asks for resolution mode, ignore any
+        # lingering `self.k` from a previous run — otherwise a sequence like
+        # `pc.run(k=5); pc.run(by_resolution=True, num_bins=3)` raises
+        # "Cannot combine k with by_resolution=True" because `self.k` is
+        # silently substituted. Explicit `by_resolution=True` is a clear
+        # mode signal that should override the fallback.
+        k_val = k if k is not None else (None if by_resolution else self.k)
         if k_val is not None:
             if k_val < 1:
                 raise InvalidKError("k must be >= 1.")

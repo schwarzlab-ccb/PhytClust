@@ -63,12 +63,18 @@ def _find_zero_length_split_k(pc, max_k: int, eps: float = 1e-12) -> Optional[in
 
     # 3. Walk k in order, using the cached backtrack. Early-exit on the first
     #    split — in practice this terminates at very small k (often k=2).
+    #    Cap the search at `zero_length_split_max_k` (default 100). The peak
+    #    detector's warning is most actionable at small k; scanning into the
+    #    thousands provides little extra information and dominates runtime
+    #    on large trees with many feasible k values.
+    search_cap = int(getattr(pc, "zero_length_split_max_k", 100))
+    effective_max_k = min(max_k, search_cap)
     try:
         prev = pc.get_clusters(1)
     except (ValueError, RuntimeError, InvalidClusteringError, MissingDPTableError):
         prev = None
 
-    for k in range(2, max_k + 1):
+    for k in range(2, effective_max_k + 1):
         try:
             cur = pc.get_clusters(k)
         except (ValueError, RuntimeError, InvalidClusteringError, MissingDPTableError):
@@ -162,25 +168,76 @@ def _single_cluster_score(
     return (beta, beta_ratios, score)
 
 
-def calculate_scores(pc, plot: bool = False) -> None:
-    results = []
+def _vectorised_dp_row_scores(pc) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorised equivalent of looping `_single_cluster_score(pc, k=k)`
+    over k = 1..max_k. Returns (betas, beta_ratios, scores) of length
+    max_k. Same edge-case semantics as the per-k version:
 
+      - k beyond DP row length → (inf, inf, inf)
+      - beta non-finite or zero → (beta, inf, 0)
+      - otherwise               → (beta, br, br * norm)
+    """
+    active_tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
+    root_id = pc.node_to_id[active_tree.root]
+
+    use_pen = getattr(pc, "use_penalized_beta_for_scoring", False)
+    dp_row = pc.dp_table[root_id] if use_pen else pc.raw_dp_table[root_id]
+    if dp_row is None:
+        raise MissingDPTableError("Root DP row missing.")
+
+    dp_row = np.asarray(dp_row, dtype=float)
+    pc.beta_1 = float(dp_row[0])
+    num_terminals = pc.num_terminals
+    max_k = int(pc.max_k)
+
+    beta_floor_frac = float(getattr(pc, "score_beta_floor_frac", 0.0) or 0.0)
+    beta_floor_abs = float(getattr(pc, "score_beta_floor_abs", 0.0) or 0.0)
+    beta_floor = max(beta_floor_abs, beta_floor_frac * pc.beta_1)
+
+    n_in = min(max_k, len(dp_row))
+    betas = np.full(max_k, np.inf, dtype=float)
+    betas[:n_in] = dp_row[:n_in]
+
+    ks = np.arange(1, max_k + 1, dtype=float)
+    norm_ratios = (num_terminals - ks) / ks
+
+    edge = ~np.isfinite(betas) | (betas == 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        beta_denom = np.maximum(betas, beta_floor)
+        beta_ratios_full = (pc.beta_1 - betas) / beta_denom
+        scores_full = beta_ratios_full * norm_ratios
+
+    beta_ratios = np.where(edge, np.inf, beta_ratios_full)
+    scores = np.where(
+        edge | ~np.isfinite(scores_full),
+        0.0,
+        scores_full,
+    )
+
+    # k beyond dp_row length: original returned (inf, inf, inf).
+    # Edge handling above set scores=0 for those slots (since betas=inf).
+    # Restore inf so the downstream invalid_mask filters them out.
+    if n_in < max_k:
+        scores[n_in:] = np.inf
+
+    return betas, beta_ratios, scores
+
+
+def calculate_scores(pc, plot: bool = False) -> None:
     if pc.k is not None:
         from .dp import cluster_map
 
         cmap = cluster_map(pc, pc.k)
-        results.append(_single_cluster_score(pc, clusters=cmap))
-
+        beta, br, sc = _single_cluster_score(pc, clusters=cmap)
+        beta_values = np.array([beta], dtype=float)
+        den_list = np.array([br], dtype=float)
+        scores = np.array([sc], dtype=float)
     else:
         if not pc.max_k or pc.max_k <= 0:
             raise ConfigurationError(
                 "max_k must be set and positive to compute DP-based scores."
             )
-        results.extend(
-            _single_cluster_score(pc, k=k_val) for k_val in range(1, pc.max_k + 1)
-        )
-
-    beta_values, den_list, scores = map(np.array, zip(*results))
+        beta_values, den_list, scores = _vectorised_dp_row_scores(pc)
 
     scores[scores < 0] = 0
     beta_values[beta_values < 0] = 0
