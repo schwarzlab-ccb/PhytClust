@@ -49,6 +49,7 @@ const PARAM_FIELDS = [
   { path: "params.peak.ranking_mode", id: "extra-ranking-mode", type: "select" },
   { path: "params.peak.min_prominence", id: "extra-min-prominence", type: "float" },
   { path: "params.peak.relative_prominence", id: "extra-relative-prom", type: "checkbox" },
+  { path: "params.peak.exclude_k2", id: "extra-exclude-k2", type: "checkbox" },
 
   // polytomy
   { path: "params.polytomy.optimize", id: "extra-optimize-polytomies", type: "checkbox" },

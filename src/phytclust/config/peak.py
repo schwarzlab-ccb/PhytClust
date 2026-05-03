@@ -38,3 +38,7 @@ class PeakConfig:
     min_k: int = 2
     # Resolution mode: fallback for bins with no detected peaks.
     resolution_fallback_mode: str = "none"  # "none" or "max_score"
+    # If True, k=2 is never returned as a peak. In top_n / global mode the
+    # next-ranked peak is chosen instead; in resolution mode the bin that
+    # would otherwise pick k=2 advances to its next-ranked candidate.
+    exclude_k2: bool = True

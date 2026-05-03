@@ -168,6 +168,7 @@ class PhytclustRequest(BaseModel):
     use_relative_prominence: bool = False
     boundary_window_size: Optional[int] = None
     boundary_ratio_threshold: Optional[float] = None
+    exclude_k2: bool = True
 
 
 # ------------------------------------------------------
@@ -325,6 +326,7 @@ def run_phytclust(req: PhytclustRequest):
             peak_kwargs["boundary_window_size"] = req.boundary_window_size
         if req.boundary_ratio_threshold is not None:
             peak_kwargs["boundary_ratio_threshold"] = req.boundary_ratio_threshold
+        peak_kwargs["exclude_k2"] = bool(req.exclude_k2)
 
         cfg = PeakConfig(**peak_kwargs)
 

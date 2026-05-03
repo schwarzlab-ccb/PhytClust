@@ -478,6 +478,11 @@ def find_score_peaks(
     boundary_window_size = cfg.boundary_window_size
     boundary_ratio_threshold = cfg.boundary_ratio_threshold
     resolution_fallback_mode = cfg.resolution_fallback_mode
+    exclude_k2 = bool(getattr(cfg, "exclude_k2", False))
+    if exclude_k2:
+        # Force the boundary candidate, interior detector, and resolution
+        # fallback to all treat k=2 as out-of-range in a single place.
+        min_k = max(min_k, 3)
 
     if scores is None:
         scores = pc.scores
@@ -542,7 +547,12 @@ def find_score_peaks(
         )
 
     # Special case: only meaningful score is at k=2
-    if len(scores) > 1 and nonzero_idx.size == 1 and nonzero_idx[0] == 1:
+    if (
+        not exclude_k2
+        and len(scores) > 1
+        and nonzero_idx.size == 1
+        and nonzero_idx[0] == 1
+    ):
         pc.peaks_by_rank = [2]
         if not resolution_on:
             pc.resolution_info = None
@@ -648,9 +658,12 @@ def find_score_peaks(
             dedup[pk] = (prom, sc)
     peak_data = [(pk, prom, sc) for pk, (prom, sc) in dedup.items()]
 
+    if exclude_k2:
+        peak_data = [item for item in peak_data if item[0] != 2]
+
     if len(peak_data) == 0:
         # No peaks found at all — fallback to k=2 if it beats k=3
-        if len(scores) > 2 and scores[1] > scores[2]:
+        if not exclude_k2 and len(scores) > 2 and scores[1] > scores[2]:
             pc.peaks_by_rank = [2]
             if not resolution_on:
                 pc.resolution_info = None

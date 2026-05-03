@@ -113,6 +113,7 @@ export async function runPhytClust() {
   if (minProm !== null) payload.min_prominence = minProm;
   if (readCheckParam("extra-relative-prom"))
     payload.use_relative_prominence = true;
+  payload.exclude_k2 = readCheckParam("extra-exclude-k2");
 
   showStatus("Running PhytClust...", "info");
   clearTree();

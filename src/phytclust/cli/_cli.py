@@ -147,9 +147,13 @@ def _runtime_overrides_from_cfg(raw_cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _peak_config_from_cfg(raw_cfg: dict[str, Any], lambda_weight: float) -> PeakConfig:
+def _peak_config_from_cfg(
+    raw_cfg: dict[str, Any],
+    lambda_weight: float,
+    exclude_k2: bool = True,
+) -> PeakConfig:
     """Build PeakConfig from CLI lambda override + optional config file values."""
-    peak_cfg = PeakConfig(lambda_weight=lambda_weight)
+    peak_cfg = PeakConfig(lambda_weight=lambda_weight, exclude_k2=exclude_k2)
     peak_block = raw_cfg.get("peak")
     if not isinstance(peak_block, dict):
         peak_block = (raw_cfg.get("algorithm") or {}).get("peak")
@@ -396,6 +400,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Peak prominence parameter for score peak selection.",
     )
+    p.add_argument(
+        "--include-k2",
+        dest="exclude_k2",
+        action="store_false",
+        default=True,
+        help="Allow k=2 as a peak. By default k=2 is excluded; top_n / "
+             "resolution mode then pick the next-ranked peak instead.",
+    )
 
     # Outlier and cluster size constraints
     p.add_argument(
@@ -533,7 +545,7 @@ def main(argv=None) -> int:
                 args.max_k or "auto",
             )
 
-            peak_cfg = _peak_config_from_cfg(cfg, args.lambda_weight)
+            peak_cfg = _peak_config_from_cfg(cfg, args.lambda_weight, args.exclude_k2)
             pc.peak_config = peak_cfg
             run_kwargs = dict(
                 k=args.k,
