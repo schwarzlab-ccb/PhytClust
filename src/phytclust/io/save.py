@@ -11,6 +11,21 @@ from ..metrics.indices import cluster_alpha
 logger = logging.getLogger(__name__)
 
 
+def _safe_filename(filename: str) -> str:
+    """Reduce a user-supplied output filename to a safe basename.
+
+    Rejects path separators, parent-dir references, and absolute paths so a
+    caller can never write outside ``results_dir`` (path-traversal guard).
+    """
+    name = os.path.basename(filename)
+    if name != filename or "/" in filename or "\\" in filename or name in ("", ".", ".."):
+        raise ValueError(
+            f"Invalid output filename {filename!r}: must be a plain filename "
+            "with no path separators or '..'."
+        )
+    return name
+
+
 def save_clusters(
     pc,
     results_dir: str,
@@ -24,6 +39,7 @@ def save_clusters(
 
     Returns the path to the written file, or None if nothing was saved.
     """
+    filename = _safe_filename(filename)
     os.makedirs(results_dir, exist_ok=True)
 
     if pc.k is not None:
@@ -61,12 +77,14 @@ def save_clusters(
         alpha_rows.append(alpha_info)
 
         for node, cid in cmap.items():
-            if outlier_thresh is not None:
-                mark = -1 if counts[cid] < outlier_thresh else cid
-            elif outlier:
-                mark = -1 if counts[cid] == 1 else cid
-            else:
+            if not outlier:
+                # `outlier=False` (e.g. --no-outlier) is a master off switch:
+                # never mark, regardless of any configured size threshold.
                 mark = cid
+            elif outlier_thresh is not None:
+                mark = -1 if counts[cid] < outlier_thresh else cid
+            else:
+                mark = -1 if counts[cid] == 1 else cid
             records.append({
                 "Node Name": node.name,
                 "k": k_val,
