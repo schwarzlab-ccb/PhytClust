@@ -79,6 +79,13 @@ def _existing_path_or_stdin(p: str) -> pathlib.Path | str:
     return path
 
 
+def _existing_path(p: str) -> pathlib.Path:
+    path = pathlib.Path(p)
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"file not found: {p}")
+    return path
+
+
 def _package_version() -> str:
     if version is None:
         return "unknown"
@@ -89,22 +96,34 @@ def _package_version() -> str:
 
 
 def _load_config(path: pathlib.Path | None) -> dict:
+    """Load a YAML/JSON config file into a dict.
+
+    Raises ConfigurationError (rather than silently returning {}) on a missing,
+    unparseable, or non-mapping config, so a typo can't silently fall back to a
+    full-defaults run. yaml.safe_load parses JSON too, so no separate branch.
+    """
     if not path:
         return {}
     try:
         text = path.read_text()
-        try:
-            import yaml
+    except OSError as exc:
+        raise ConfigurationError(f"Could not read config {path}: {exc}") from exc
 
-            data = yaml.safe_load(text)
-            return data or {}
-        except Exception:
-            import json
+    import yaml
 
-            return json.loads(text or "{}")
-    except Exception as exc:
-        LOG.warning("Could not read config %s: %s", path, exc)
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ConfigurationError(f"Could not parse config {path}: {exc}") from exc
+
+    if data is None:
         return {}
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"Config {path} must contain a mapping at the top level, "
+            f"got {type(data).__name__}."
+        )
+    return data
 
 
 def _runtime_overrides_from_cfg(raw_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -149,20 +168,29 @@ def _runtime_overrides_from_cfg(raw_cfg: dict[str, Any]) -> dict[str, Any]:
 
 def _peak_config_from_cfg(
     raw_cfg: dict[str, Any],
-    lambda_weight: float,
-    exclude_k2: bool = True,
+    cli_overrides: dict[str, Any] | None = None,
 ) -> PeakConfig:
-    """Build PeakConfig from CLI lambda override + optional config file values."""
-    peak_cfg = PeakConfig(lambda_weight=lambda_weight, exclude_k2=exclude_k2)
+    """Build a PeakConfig with precedence: explicit CLI flags > config file > defaults.
+
+    Start from dataclass defaults, overlay the config file's ``peak`` block, then
+    overlay only the CLI flags the user actually set (``cli_overrides``). This is
+    the standard precedence; the previous version let the config file clobber
+    explicit command-line flags.
+    """
+    peak_cfg = PeakConfig()
+
     peak_block = raw_cfg.get("peak")
     if not isinstance(peak_block, dict):
         peak_block = (raw_cfg.get("algorithm") or {}).get("peak")
-    if not isinstance(peak_block, dict):
-        return peak_cfg
+    if isinstance(peak_block, dict):
+        for key, val in peak_block.items():
+            if hasattr(peak_cfg, key):
+                setattr(peak_cfg, key, val)
 
-    for key, val in peak_block.items():
-        if hasattr(peak_cfg, key):
+    for key, val in (cli_overrides or {}).items():
+        if val is not None and hasattr(peak_cfg, key):
             setattr(peak_cfg, key, val)
+
     return peak_cfg
 
 
@@ -189,7 +217,11 @@ def _add_common_run_flags(sp: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Write tsv rows for *every* k from 1..max_k (can be large!).",
     )
-    sp.add_argument("--tsv-name", default="phytclust_results.tsv")
+    sp.add_argument(
+        "--tsv-name",
+        default=None,
+        help="Output tsv filename (default: from config or 'phytclust_results.tsv').",
+    )
     sp.add_argument(
         "--no-tsv", action="store_true", help="Skip writing the results tsv."
     )
@@ -348,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--config",
-        type=pathlib.Path,
+        type=_existing_path,
         help="Optional JSON/YAML config with plotting/saving options.",
     )
     p.add_argument(
@@ -397,8 +429,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--lambda-weight",
         type=float,
         dest="lambda_weight",
-        default=0.5,
-        help="Peak prominence parameter for score peak selection.",
+        default=None,
+        help="Peak prominence parameter for score peak selection "
+             "(default: 0.7, from config file or PeakConfig if unset).",
     )
     p.add_argument(
         "--include-k2",
@@ -472,7 +505,11 @@ def main(argv=None) -> int:
     print_banner()
     _emit_header(args)
 
-    cfg = _load_config(args.config)
+    try:
+        cfg = _load_config(args.config)
+    except ConfigurationError as exc:
+        LOG.error("%s", exc)
+        sys.exit(2)
     runtime_cfg = build_runtime_config(_runtime_overrides_from_cfg(cfg))
     algorithm_cfg = (
         cfg.get("algorithm") if isinstance(cfg.get("algorithm"), dict) else {}
@@ -482,7 +519,7 @@ def main(argv=None) -> int:
     soft_polytomy_max_degree = (
         args.soft_polytomy_max_degree
         if args.soft_polytomy_max_degree is not None
-        else int(algorithm_cfg.get("soft_polytomy_max_degree", 18))
+        else int(algorithm_cfg.get("soft_polytomy_max_degree", 12))
     )
 
     plot_cfg = {
@@ -545,7 +582,15 @@ def main(argv=None) -> int:
                 args.max_k or "auto",
             )
 
-            peak_cfg = _peak_config_from_cfg(cfg, args.lambda_weight, args.exclude_k2)
+            # Explicit CLI flags win over config/defaults. lambda_weight
+            # defaults to None (unset); exclude_k2 is only reachable as False
+            # via --include-k2, so treat False as an explicit override.
+            cli_peak_overrides: dict[str, Any] = {}
+            if args.lambda_weight is not None:
+                cli_peak_overrides["lambda_weight"] = args.lambda_weight
+            if not args.exclude_k2:
+                cli_peak_overrides["exclude_k2"] = False
+            peak_cfg = _peak_config_from_cfg(cfg, cli_peak_overrides)
             pc.peak_config = peak_cfg
             run_kwargs = dict(
                 k=args.k,
@@ -603,9 +648,9 @@ def main(argv=None) -> int:
                 pc.save(
                     results_dir=args.out_dir,
                     filename=(
-                        save_default_filename
-                        if args.tsv_name == "phytclust_results.tsv"
-                        else args.tsv_name
+                        args.tsv_name
+                        if args.tsv_name is not None
+                        else save_default_filename
                     ),
                     outlier=(False if args.no_outlier else save_default_outlier),
                     output_all=args.save_all_k,

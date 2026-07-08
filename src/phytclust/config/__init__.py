@@ -1,5 +1,4 @@
 from .outlier import OutlierConfig
-from .core import CoreConfig
 from .peak import PeakConfig
 from .runtime import (
     RuntimeConfig,
@@ -12,7 +11,6 @@ from .runtime import (
 
 __all__ = [
     "OutlierConfig",
-    "CoreConfig",
     "PeakConfig",
     "RuntimeConfig",
     "PlotConfig",

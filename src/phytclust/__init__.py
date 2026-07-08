@@ -1,6 +1,5 @@
 from .algo.core import PhytClust
 from .config import (
-    CoreConfig,
     OutlierConfig,
     PeakConfig,
     RuntimeConfig,
@@ -23,7 +22,6 @@ from importlib.metadata import version, PackageNotFoundError
 
 __all__ = [
     "PhytClust",
-    "CoreConfig",
     "OutlierConfig",
     "PeakConfig",
     "RuntimeConfig",
