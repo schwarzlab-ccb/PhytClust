@@ -636,6 +636,13 @@ document.addEventListener("DOMContentLoaded", function () {
       copySvgToClipboard("#optimalk_plot");
     });
 
+  var optkWidthScaleEl = document.getElementById("optk-width-scale");
+  if (optkWidthScaleEl) {
+    optkWidthScaleEl.addEventListener("change", function () {
+      drawOptimalK(state.latestOptimalKData);
+    });
+  }
+
   // ── Cluster selector ──
   var clusterSelect = document.getElementById("cluster-select");
   if (clusterSelect)

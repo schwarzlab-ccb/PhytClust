@@ -5,7 +5,7 @@
 
 import { state } from "../state.js";
 import { d3Tooltip } from "../dom.js";
-import { getThemeColors } from "../colors.js";
+import { getThemeColors, BASE_COLORS, withAlpha } from "../colors.js";
 
 export function drawOptimalK(data) {
   if (!data) data = state.latestOptimalKData;
@@ -28,6 +28,15 @@ export function drawOptimalK(data) {
   for (let i = 0; i < scores.length - 1; i++)
     dataPoints.push({ k: i + 2, score: scores[i + 1] });
 
+  // With only a single score (k=1) there is nothing to plot at k>=2; guard so
+  // the log/linear scale domains don't collapse to NaN and produce broken axes.
+  if (dataPoints.length === 0) {
+    plotEl.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--pc-text-muted);">Not enough scores to plot (need k ≥ 2).</div>';
+    window.PHYTCLUST_ORIGINAL_OPTIMALK_SVG = null;
+    return;
+  }
+
   var peakPoints = peaks
     .map((k) => {
       var idx = k - 2;
@@ -37,7 +46,19 @@ export function drawOptimalK(data) {
     })
     .filter((d) => d);
 
-  var width = plotEl.clientWidth || 700;
+  var widthScaleEl = document.getElementById("optk-width-scale");
+  var widthScale = widthScaleEl ? parseFloat(widthScaleEl.value || "1") : 1;
+  if (!isFinite(widthScale) || widthScale < 1) widthScale = 1;
+
+  // Container scrolls horizontally when the SVG is wider than the viewport.
+  // Use `scroll` (not `auto`) so the user sees the scrollbar appear.
+  plotEl.style.overflowX = widthScale > 1 ? "scroll" : "hidden";
+  plotEl.style.overflowY = "hidden";
+
+  // clientWidth must be measured BEFORE the SVG is appended, otherwise an
+  // already-wide SVG from the previous render distorts the next baseline.
+  var baseWidth = plotEl.clientWidth || 700;
+  var width = Math.max(baseWidth, Math.round(baseWidth * widthScale));
   var height = plotEl.clientHeight || 420;
   var margin = { top: 24, right: 24, bottom: 48, left: 58 };
   var innerWidth = width - margin.left - margin.right;
@@ -82,7 +103,7 @@ export function drawOptimalK(data) {
       .range([0, innerWidth])
       .padding(0.2);
     var nPts = dataPoints.length;
-    var dtick = Math.max(1, Math.ceil(nPts / 10));
+    var dtick = Math.max(1, Math.ceil(nPts / Math.max(10, 10 * widthScale)));
     xAxis = d3
       .axisBottom(xScale)
       .tickValues(dataPoints.map((d) => d.k).filter((d, i) => i % dtick === 0))
@@ -97,6 +118,61 @@ export function drawOptimalK(data) {
     ])
     .nice()
     .range([innerHeight, 0]);
+
+  // Resolution-mode bin bands (behind grid + line)
+  const isResolution =
+    data &&
+    data.mode === "resolution" &&
+    Array.isArray(data.bin_ranges) &&
+    data.bin_ranges.length > 0;
+  let binLabels = null;
+  if (isResolution) {
+    const ks = dataPoints.map((d) => d.k);
+    const kMin = ks[0];
+    const kMax = ks[ks.length - 1];
+    const clamp = (k) => Math.max(kMin, Math.min(kMax, k));
+    const xLeft = (k) => xScale(clamp(k));
+    const xRight = (k) =>
+      mode === "log"
+        ? xScale(clamp(k))
+        : xScale(clamp(k)) + xScale.bandwidth();
+    binLabels = [];
+    data.bin_ranges.forEach(([lo, hi], i) => {
+      const rawL = xLeft(lo);
+      const rawR = xRight(hi);
+      if (!isFinite(rawL) || !isFinite(rawR)) return;
+      const x0 = Math.max(0, Math.min(rawL, rawR));
+      const x1 = Math.min(innerWidth, Math.max(rawL, rawR));
+      if (x1 <= x0) return;
+      const colour = BASE_COLORS[i % BASE_COLORS.length];
+      g.append("rect")
+        .attr("class", "bin-band")
+        .attr("x", x0)
+        .attr("y", 0)
+        .attr("width", x1 - x0)
+        .attr("height", innerHeight)
+        .attr("fill", withAlpha(colour, 0.1))
+        .attr("stroke", "none");
+      if (i < data.bin_ranges.length - 1) {
+        g.append("line")
+          .attr("class", "bin-boundary")
+          .attr("x1", x1)
+          .attr("x2", x1)
+          .attr("y1", 0)
+          .attr("y2", innerHeight)
+          .attr("stroke", tc.muted)
+          .attr("stroke-width", 1)
+          .attr("stroke-dasharray", "3,3")
+          .attr("opacity", 0.7);
+      }
+      binLabels.push({
+        x: (x0 + x1) / 2,
+        label: `CL${i + 1}`,
+        range: `k = ${lo}–${hi}`,
+        colour,
+      });
+    });
+  }
 
   // Grid
   g.append("g")
@@ -125,6 +201,26 @@ export function drawOptimalK(data) {
     ag.selectAll("line").attr("stroke", tc.branch);
     ag.selectAll("path").attr("stroke", tc.branch);
   });
+
+  if (binLabels && binLabels.length > 0) {
+    const labelG = g
+      .selectAll(".bin-label")
+      .data(binLabels)
+      .enter()
+      .append("g")
+      .attr("class", "bin-label")
+      .attr("transform", (d) => `translate(${d.x}, 4)`);
+    labelG
+      .append("text")
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline", "hanging")
+      .attr("font-size", 11)
+      .attr("font-weight", 600)
+      .attr("fill", (d) => d.colour)
+      .text((d) => d.label)
+      .append("title")
+      .text((d) => `${d.label}: ${d.range}`);
+  }
 
   g.append("text")
     .attr("x", innerWidth / 2)
@@ -264,9 +360,13 @@ export function drawOptimalK(data) {
     axisModeEl.__wired = true;
     axisModeEl.addEventListener("change", function () {
       axisModeEl.__userOverride = true;
-      drawOptimalK(data);
+      // Call with no argument so we re-read state.latestOptimalKData: the
+      // handler is wired once and would otherwise close over the FIRST render's
+      // `data`, redrawing a stale (previous-tree) plot after a new run.
+      drawOptimalK();
     });
   }
+
 
   const okSvgNode = document.querySelector("#optimalk_plot svg");
   window.PHYTCLUST_ORIGINAL_OPTIMALK_SVG = okSvgNode

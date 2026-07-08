@@ -5,7 +5,7 @@
 
 import { state } from "../state.js";
 import { d3Tooltip } from "../dom.js";
-import { getThemeColors } from "../colors.js";
+import { getThemeColors, BASE_COLORS, withAlpha } from "../colors.js";
 import { showToast } from "../ui/toast.js";
 import { populateClusterSelector, switchCluster } from "./cluster_editor.js";
 
@@ -58,6 +58,44 @@ export function drawMiniScores(data) {
     ])
     .nice()
     .range([innerH, 0]);
+
+  // Resolution-mode bin bands
+  if (
+    data &&
+    data.mode === "resolution" &&
+    Array.isArray(data.bin_ranges) &&
+    data.bin_ranges.length > 0
+  ) {
+    var ks = dataPoints.map((d) => d.k);
+    var kMin = ks[0];
+    var kMax = ks[ks.length - 1];
+    data.bin_ranges.forEach(function (range, i) {
+      var lo = Math.max(kMin, range[0]);
+      var hi = Math.min(kMax, range[1]);
+      if (hi <= lo) return;
+      var x0 = xScale(lo);
+      var x1 = xScale(hi);
+      var colour = BASE_COLORS[i % BASE_COLORS.length];
+      g.append("rect")
+        .attr("x", Math.min(x0, x1))
+        .attr("y", 0)
+        .attr("width", Math.abs(x1 - x0))
+        .attr("height", innerH)
+        .attr("fill", withAlpha(colour, 0.1))
+        .attr("stroke", "none");
+      if (i < data.bin_ranges.length - 1) {
+        g.append("line")
+          .attr("x1", x1)
+          .attr("x2", x1)
+          .attr("y1", 0)
+          .attr("y2", innerH)
+          .attr("stroke", tc.muted)
+          .attr("stroke-width", 1)
+          .attr("stroke-dasharray", "2,2")
+          .attr("opacity", 0.7);
+      }
+    });
+  }
 
   // Axes (minimal)
   g.append("g")
