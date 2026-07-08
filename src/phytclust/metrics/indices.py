@@ -13,13 +13,19 @@ def colless_index_calc(tree: Tree) -> int:
     Colless index for *binary* trees: sum over internal nodes of
     |#leaves(left) - #leaves(right)|.
     """
+    # O(n): count leaves under each node in a single postorder pass instead of
+    # calling get_terminals() (a full subtree re-walk) at every internal node.
+    leaf_count: dict[Any, int] = {}
     colless_sum = 0
-    for node in tree.find_clades(terminal=False):
-        if len(node.clades) != 2:
+    for node in tree.find_clades(order="postorder"):
+        if node.is_terminal():
+            leaf_count[node] = 1
             continue
-        left_size = len(node.clades[0].get_terminals())
-        right_size = len(node.clades[1].get_terminals())
-        colless_sum += abs(left_size - right_size)
+        leaf_count[node] = sum(leaf_count[c] for c in node.clades)
+        if len(node.clades) == 2:
+            colless_sum += abs(
+                leaf_count[node.clades[0]] - leaf_count[node.clades[1]]
+            )
     return colless_sum
 
 
@@ -206,30 +212,34 @@ def cluster_alpha(tree: Any, cmap: dict[Clade, int]) -> dict[str, Any]:
     for term, cid in cmap.items():
         cluster_terms[cid].append(term)
 
-    intra_ids: set[int] = set()
+    # A node is "intra" iff it is a strict descendant of some cluster's MRCA.
+    # Collect the MRCA of each cluster, then classify every node in a single
+    # pre-order walk that propagates "an ancestor is an MRCA" downward. This
+    # replaces one full-subtree walk per cluster (mrca.find_clades) plus a
+    # second whole-tree pass, without changing the result.
+    mrca_ids: set[int] = set()
     for terms in cluster_terms.values():
-        if len(terms) == 1:
-            mrca = terms[0]
-        else:
-            mrca = tree.common_ancestor(terms)
-        if mrca is None:
-            continue
-        for node in mrca.find_clades():
-            if node is not mrca:
-                intra_ids.add(id(node))
+        mrca = terms[0] if len(terms) == 1 else tree.common_ancestor(terms)
+        if mrca is not None:
+            mrca_ids.add(id(mrca))
 
     intra_sum = 0.0
     intra_count = 0
     extra_sum = 0.0
     extra_count = 0
-    for node in tree.find_clades():
+    stack: list[tuple[Any, bool]] = [(tree.root, False)]
+    while stack:
+        node, anc_is_mrca = stack.pop()
         bl = float(node.branch_length or 0.0)
-        if id(node) in intra_ids:
+        if anc_is_mrca:
             intra_sum += bl
             intra_count += 1
         else:
             extra_sum += bl
             extra_count += 1
+        child_flag = anc_is_mrca or (id(node) in mrca_ids)
+        for child in node.clades:
+            stack.append((child, child_flag))
 
     avg_intra = intra_sum / intra_count if intra_count else float("nan")
     avg_extra = extra_sum / extra_count if extra_count else float("nan")
