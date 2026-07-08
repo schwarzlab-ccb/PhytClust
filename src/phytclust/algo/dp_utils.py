@@ -3,6 +3,18 @@ import numpy as np
 from ..exceptions import ConfigurationError, InvalidKError
 
 
+def tie_atol(value: float, dtype) -> float:
+    """Absolute tolerance for treating two DP costs as tied.
+
+    A fixed 1e-12 is far below float32 ULP (~1e-2..1e-4 for realistic
+    dispersion sums), so under ``dp_float32`` it essentially never fires and the
+    outlier tie-break silently degrades. Scale by the dtype epsilon and the
+    magnitude, keeping a 1e-12 floor to preserve the previous float64 behaviour.
+    """
+    eps = float(np.finfo(dtype).eps)
+    return max(1e-12, 8.0 * eps * max(1.0, abs(float(value))))
+
+
 def validate_args(pc) -> None:
     if pc.k is not None and pc.k < 1:
         raise InvalidKError("k must be ≥ 1 if provided.")
@@ -28,9 +40,42 @@ def validate_args(pc) -> None:
 
     # Soft mode is exponential in the node degree.
     if polytomy_mode == "soft":
-        max_deg = getattr(pc, "soft_polytomy_max_degree", 18)
+        max_deg = getattr(pc, "soft_polytomy_max_degree", 12)
         if max_deg < 2:
             raise ConfigurationError("soft_polytomy_max_degree must be ≥ 2.")
+
+
+def penalty_active(pc) -> bool:
+    """True iff the outlier cluster-formation penalty should shape the DP."""
+    o = pc.outlier
+    return bool(
+        getattr(o, "penalty_enabled", False)
+        and o.size_threshold is not None
+        and o.ratio_weight > 0
+    )
+
+
+def cluster_formation_penalty(n_leaves: int, pc) -> float:
+    """Additive penalty for forming one cluster of ``n_leaves`` leaves.
+
+    Zero for clusters at or above ``size_threshold``; otherwise
+    ``ratio_weight * shape(n_leaves)`` per ``ratio_mode`` (see OutlierConfig).
+    Being per-cluster, this term is additive over clusters and therefore
+    decomposes exactly over the tree DP.
+    """
+    o = pc.outlier
+    thresh = o.size_threshold
+    if thresh is None or n_leaves >= thresh:
+        return 0.0
+    s = max(1, int(n_leaves))
+    mode = o.ratio_mode
+    if mode == "inverse":
+        shape = 1.0 / s
+    elif mode == "exp":
+        shape = float(np.expm1(thresh - s))
+    else:  # "power": linear in the size deficit
+        shape = float(thresh - s)
+    return float(o.ratio_weight) * shape
 
 
 def node_support_factor(node, pc) -> float:

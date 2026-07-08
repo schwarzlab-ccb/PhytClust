@@ -13,8 +13,11 @@ from ..exceptions import (
 )
 from .dp_polytomy import compute_polytomy_dp
 from .dp_utils import (
+    cluster_formation_penalty,
     eff_length,
+    penalty_active,
     subtree_all_zero,
+    tie_atol,
     validate_args as _validate_args,
 )
 from ..validation import (
@@ -119,9 +122,20 @@ def compute_dp_table(pc) -> None:
     pc.cluster_cost = {}
     pc._root_ties = {}
 
-    dtype = np.float64 if pc.num_terminals > 80_000 else np.float32
+    # Accumulate in float64 by default. The score forms (beta_1 - beta)/beta,
+    # a difference of large near-equal sums; float32's ~7-digit mantissa can
+    # be swamped by tiny late-k beta on trees with a large total dispersion.
+    # float32 stays available (opt-in) for very large trees where the DP
+    # frontier's memory footprint is the binding constraint.
+    dtype = np.float32 if getattr(pc, "dp_float32", False) else np.float64
 
-    max_states_global = pc.max_k if pc.max_k is not None else pc.num_terminals
+    dp_cap = getattr(pc, "_dp_cap", None)
+    if dp_cap is not None:
+        max_states_global = dp_cap
+    elif pc.max_k is not None:
+        max_states_global = pc.max_k
+    else:
+        max_states_global = pc.num_terminals
     if max_states_global < 1:
         raise InvalidKError("max_k (or implied max_states_global) must be ≥ 1.")
 
@@ -138,6 +152,19 @@ def compute_dp_table(pc) -> None:
         getattr(pc, "preserve_dp_tables", False) or logger.isEnabledFor(logging.DEBUG)
     )
 
+    # When the outlier penalty is active, ``dp_table`` (total) carries
+    # raw + per-cluster penalty and the DP minimises it; otherwise ``dp_table``
+    # simply aliases ``raw_dp_table`` (one array instead of two identical ones).
+    pen_active = penalty_active(pc)
+    if pen_active and getattr(pc, "optimize_polytomies", True) and any(
+        (not n.is_terminal()) and len(n.clades) > 2 for n in nodes
+    ):
+        raise ConfigurationError(
+            "outlier penalty (penalty_enabled=True) is currently supported for "
+            "bifurcating trees only. Set optimize_polytomies=False to resolve "
+            "polytomies first, or disable the penalty."
+        )
+
     if use_outlier:
         pc._n_small = [None] * num_nodes
 
@@ -146,8 +173,12 @@ def compute_dp_table(pc) -> None:
         n_leaves = pc.num_leaves_per_node[node]
         n_states = min(n_leaves, max_states_global)
 
-        total_array = np.full(n_states + 1, np.inf, dtype=dtype)
         raw_array = np.full(n_states + 1, np.inf, dtype=dtype)
+        # Collapse the redundant second table when there is no penalty: dp_table
+        # then shares raw_dp_table. With a penalty, total is a distinct array.
+        total_array = (
+            np.full(n_states + 1, np.inf, dtype=dtype) if pen_active else raw_array
+        )
         backptr_array = np.full((2, n_states + 1), -1, dtype=bp_dtype)
 
         if node.is_terminal():
@@ -159,6 +190,8 @@ def compute_dp_table(pc) -> None:
                 raw_array[0] = np.inf
 
             total_array[0] = raw_array[0]
+            if pen_active and np.isfinite(raw_array[0]):
+                total_array[0] = raw_array[0] + cluster_formation_penalty(n_leaves, pc)
             if use_outlier:
                 ns = np.zeros(n_states + 1, dtype=np.int32)
                 ns[0] = 1 if n_leaves < outlier_thresh else 0
@@ -179,7 +212,8 @@ def compute_dp_table(pc) -> None:
                 dtype,
                 bp_dtype,
             )
-            pc.dp_table[node_id] = total_array
+            # pen_active + polytomy is guarded out above, so this aliases raw.
+            pc.dp_table[node_id] = total_array if pen_active else raw_array
             pc.raw_dp_table[node_id] = raw_array
             pc.polytomy_backptr[node_id] = poly_info
 
@@ -232,6 +266,8 @@ def compute_dp_table(pc) -> None:
         backptr_array[1, 0] = 0
 
         total_array[0] = raw_array[0]
+        if pen_active and np.isfinite(raw_array[0]):
+            total_array[0] = raw_array[0] + cluster_formation_penalty(n_leaves, pc)
         if use_outlier:
             left_ns = pc._n_small[left_id]
             right_ns = pc._n_small[right_id]
@@ -312,6 +348,29 @@ def compute_dp_table(pc) -> None:
 
             n_sm = left_ns[i_vals] + right_ns[j_vals]
 
+            if pen_active:
+                # Minimise the penalised objective (raw + per-cluster penalty),
+                # carried in the children's total arrays; report the raw WSS of
+                # the chosen split so scoring stays geometry-true.
+                total_scores = left_total[i_vals] + right_total[j_vals]
+                tf = total_scores[finite_idx]
+                min_t = float(np.min(tf))
+                atol = tie_atol(min_t, dtype)
+                tied = finite_idx[np.abs(total_scores[finite_idx] - min_t) <= atol]
+                if len(tied) > 1:
+                    n_sm_t = n_sm[tied]
+                    min_n = int(np.min(n_sm_t))
+                    still = tied[n_sm_t == min_n]
+                    best = int(still[np.argmin(raw_scores[still])])
+                else:
+                    best = int(tied[0])
+                raw_array[k] = raw_scores[best]
+                total_array[k] = total_scores[best]
+                ns_array[k] = n_sm[best]
+                backptr_array[0, k] = i_vals[best]
+                backptr_array[1, k] = j_vals[best]
+                continue
+
             if prefer_fewer:
                 # Lexicographic: minimise outlier count, then raw cost
                 n_sm_f = n_sm[finite_idx]
@@ -322,7 +381,8 @@ def compute_dp_table(pc) -> None:
                 # Minimise raw cost, break ties by fewer outliers
                 raw_f = raw_scores[finite_idx]
                 min_raw = float(np.min(raw_f))
-                tied = finite_idx[np.abs(raw_f - min_raw) <= 1e-12]
+                atol = tie_atol(min_raw, dtype)
+                tied = finite_idx[np.abs(raw_f - min_raw) <= atol]
                 if len(tied) > 1:
                     n_sm_t = n_sm[tied]
                     min_n = int(np.min(n_sm_t))

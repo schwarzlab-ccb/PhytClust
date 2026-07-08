@@ -6,6 +6,7 @@ from .dp_utils import (
     node_support_factor,
     state_better,
     subtree_all_zero,
+    tie_atol,
 )
 
 
@@ -64,6 +65,7 @@ def compute_polytomy_dp_hard(
 
     use_outlier = outlier_thresh is not None
     prefer_fewer = pc.outlier.prefer_fewer
+    atol = tie_atol(1.0, dtype)
 
     raw_array = np.full(n_states + 1, np.inf, dtype=dtype)
     total_array = np.full(n_states + 1, np.inf, dtype=dtype)
@@ -178,6 +180,7 @@ def compute_polytomy_dp_hard(
                     best_ns,
                     use_outlier=use_outlier,
                     prefer_fewer=prefer_fewer,
+                    atol=atol,
                 ):
                     best_raw = cand_raw
                     best_ns = cand_ns
@@ -226,7 +229,7 @@ def compute_polytomy_dp_soft(
     """
     children = list(node.clades)
     m = len(children)
-    max_deg = getattr(pc, "soft_polytomy_max_degree", 18)
+    max_deg = getattr(pc, "soft_polytomy_max_degree", 12)
     if m > max_deg:
         raise ConfigurationError(
             f"soft polytomy DP is exponential in node degree; "
@@ -240,6 +243,7 @@ def compute_polytomy_dp_soft(
 
     use_outlier = outlier_thresh is not None
     prefer_fewer = pc.outlier.prefer_fewer
+    atol = tie_atol(1.0, dtype)
 
     raw_array = np.full(n_states + 1, np.inf, dtype=dtype)
     total_array = np.full(n_states + 1, np.inf, dtype=dtype)
@@ -365,6 +369,7 @@ def compute_polytomy_dp_soft(
                     best_ns,
                     use_outlier=use_outlier,
                     prefer_fewer=prefer_fewer,
+                    atol=atol,
                 ):
                     dp[mask2][q2] = cand_raw
                     if use_outlier:
@@ -412,6 +417,7 @@ def compute_polytomy_dp_soft(
                                 best_ns,
                                 use_outlier=use_outlier,
                                 prefer_fewer=prefer_fewer,
+                                atol=atol,
                             ):
                                 dp[mask2][q2] = cand_raw
                                 if use_outlier:

@@ -114,8 +114,10 @@ class PhytClust:
         If True, use native DP over multifurcations.
     polytomy_mode : {"hard", "soft"}, default="hard"
         Hard mode forbids cross-child partial merges; soft mode allows them.
-    soft_polytomy_max_degree : int, default=18
-        Degree guardrail for soft mode's exponential subset DP.
+    soft_polytomy_max_degree : int, default=12
+        Degree guardrail for soft mode's exponential subset DP. Soft-mode work is
+        Θ(3^degree); a degree-12 polytomy is already ~5e5 subset-iterations, so
+        raise this only deliberately for a specific tree.
     preserve_dp_tables : bool, default=False
         Keep intermediate child DP rows instead of freeing them after merge.
         Useful for debugging/inspection; increases memory usage.
@@ -145,8 +147,12 @@ class PhytClust:
     no_split_zero_length: bool = False
     optimize_polytomies: bool = True
     polytomy_mode: str = "hard"
-    soft_polytomy_max_degree: int = 18
+    soft_polytomy_max_degree: int = 12
     preserve_dp_tables: bool = False
+
+    # Accumulate the DP in float32 (memory-saving, opt-in) instead of the
+    # float64 default. Only worth it on very large trees; costs score precision.
+    dp_float32: bool = False
 
     compute_all_clusters: bool = False
     runtime_config: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -172,6 +178,16 @@ class PhytClust:
         # Full cache key for the DP table: tree hash + every parameter that
         # changes the contents of dp_table/raw_dp_table/backptr.
         self._dp_cache_sig: Optional[tuple] = None
+        # Max k the cached DP arrays were sized for. Grows monotonically
+        # within a stable signature so a later call asking for a smaller k
+        # is a pure cache hit.
+        self._dp_cap: Optional[int] = None
+        # Cached raw outputs of _vectorised_dp_row_scores (betas, ratios,
+        # scores) plus the max_k they were computed at. Lets shrinking max_k
+        # be served by slicing instead of recomputing.
+        self._score_raw_arrays: Optional[tuple] = None
+        self._score_raw_cap: Optional[int] = None
+        self._score_raw_base_sig: Optional[tuple] = None
         # Cache key for pc.scores: depends on DP + max_k + scoring flags.
         self._scores_cache_sig: Optional[tuple] = None
         self.clusters: dict[int, IntMap] = {}
@@ -207,8 +223,12 @@ class PhytClust:
             self.polytomy_mode,
             self.soft_polytomy_max_degree,
             self.preserve_dp_tables,
+            self.dp_float32,
             self.outlier.size_threshold,
             self.outlier.prefer_fewer,
+            self.outlier.penalty_enabled,
+            self.outlier.ratio_weight,
+            self.outlier.ratio_mode,
         )
 
     def _scores_signature(self) -> tuple:
@@ -219,12 +239,30 @@ class PhytClust:
             bool(getattr(self, "use_penalized_beta_for_scoring", False)),
         )
 
-    def _ensure_dp(self) -> None:
-        current = self._dp_signature()
+    def _resolve_dp_cap(self, required_cap: Optional[int]) -> int:
+        """Pick the DP-array cap to build for, clamped to num_terminals."""
+        if required_cap is not None:
+            cap = required_cap
+        elif self.max_k is not None:
+            cap = self.max_k
+        else:
+            cap = max(2, ceil(self.num_terminals * self.max_k_limit))
+        return max(1, min(self.num_terminals, int(cap)))
 
-        if self._dp_ready and (self._dp_cache_sig == current):
+    def _ensure_dp(self, required_cap: Optional[int] = None) -> None:
+        current = self._dp_signature()
+        needed_cap = self._resolve_dp_cap(required_cap)
+
+        sig_matches = self._dp_ready and (self._dp_cache_sig == current)
+        if sig_matches and self._dp_cap is not None and needed_cap <= self._dp_cap:
             logger.debug("DP exists, not recalculating")
             return
+
+        # If only the cap grew, keep growing monotonically so alternating
+        # k values don't ping-pong rebuilds.
+        new_cap = needed_cap
+        if sig_matches and self._dp_cap is not None:
+            new_cap = max(self._dp_cap, needed_cap)
 
         # DP is being rebuilt; every downstream cache must be invalidated.
         self.clusters = {}
@@ -232,8 +270,12 @@ class PhytClust:
         self.peaks_by_rank = None
         self.alpha_by_k = {}
         self._scores_cache_sig = None
+        self._score_raw_arrays = None
+        self._score_raw_cap = None
+        self._score_raw_base_sig = None
 
         validate_args(self)
+        self._dp_cap = new_cap
         compute_dp_table(self)
 
         self._dp_ready = True
@@ -349,7 +391,7 @@ class PhytClust:
             raise InvalidKError("Please provide k")
         if k < 1:
             raise InvalidKError("k must be >= 1")
-        self._ensure_dp()
+        self._ensure_dp(required_cap=int(k))
 
         if k in self.clusters:
             return self.clusters[k]
@@ -381,13 +423,13 @@ class PhytClust:
         peak_config: Optional[PeakConfig] = None,
     ) -> list[IntMap]:
         """Internal shared implementation for global and resolution peak modes."""
-        self._ensure_dp()
-
         eff_max_k = self._effective_max_k(max_k)
         self.max_k = eff_max_k
 
         if eff_max_k < 4:
             raise InvalidKError("max_k must be at least 4.")
+
+        self._ensure_dp(required_cap=eff_max_k)
 
         # Scores are a pure function of (DP table, max_k, scoring flags).
         # Recompute only if the signature has changed since the last call;
@@ -410,7 +452,7 @@ class PhytClust:
         if resolution_on:
             # Keep existing behavior for small trees: fallback to global peaks.
             if score_k_count < 50:
-                top = max(1, min(3, score_k_count - 1))
+                top = max(1, min(max(top_n, 3), score_k_count - 1))
                 return self._run_peak_mode(
                     resolution_on=False,
                     top_n=top,
@@ -425,7 +467,7 @@ class PhytClust:
                 self,
                 resolution_on=True,
                 num_bins=num_bins,
-                peaks_per_bin=1,
+                peaks_per_bin=max(1, int(top_n)),
                 k_start=2,
                 k_end=score_len,
                 plot=plot_scores,
@@ -497,13 +539,16 @@ class PhytClust:
         self,
         *,
         num_bins: int = 3,
+        top_n: int = 1,
         max_k: Optional[int] = None,
         plot_scores: bool = True,
         peak_config: Optional[PeakConfig] = None,
     ) -> list[IntMap]:
+        """``top_n`` here means peaks per bin (default 1)."""
         return self._run_peak_mode(
             resolution_on=True,
             num_bins=num_bins,
+            top_n=top_n,
             max_k=max_k,
             plot_scores=plot_scores,
             peak_config=peak_config,
@@ -604,7 +649,7 @@ class PhytClust:
             if top_n != 1:
                 raise ConfigurationError("`top_n` is meaningless when `k` is given.")
 
-            self._ensure_dp()
+            self._ensure_dp(required_cap=int(k_val))
             cmap = self.get_clusters(k_val)
 
             self.k = int(k_val)
@@ -623,6 +668,7 @@ class PhytClust:
         if by_resolution:
             clusters = self.best_by_resolution(
                 num_bins=num_bins or self.num_bins,
+                top_n=top_n,
                 max_k=max_k,
                 plot_scores=plot_scores,
                 peak_config=peak_config or self.peak_config,
