@@ -154,11 +154,10 @@ def _single_cluster_score(
     beta_denom = max(float(beta), beta_floor)
 
     beta_ratios = (pc.beta_1 - beta) / beta_denom
-    norm_ratios = (
-        (num_terminals - num_clusters) / float(num_clusters)
-        if num_clusters
-        else float("inf")
-    )
+    # (n - k)/k resolution weight (not textbook CH's (n - k)/(k - 1)); see the
+    # note in `_vectorised_dp_row_scores`. Keep both forms consistent.
+    # num_clusters is guaranteed >= 1 here (the < 1 case returned inf above).
+    norm_ratios = (num_terminals - num_clusters) / float(num_clusters)
 
     if not np.isfinite(beta_ratios) or not np.isfinite(norm_ratios):
         score = float("inf")
@@ -199,6 +198,13 @@ def _vectorised_dp_row_scores(pc) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     betas[:n_in] = dp_row[:n_in]
 
     ks = np.arange(1, max_k + 1, dtype=float)
+    # Note: this is a Calinski-Harabasz-style variance ratio, but we normalise
+    # by (n - k)/k rather than the textbook CH (n - k)/(k - 1). This is
+    # intentional: PhytClust uses this term as a resolution weight for peak
+    # ranking (not as a strict CH statistic), and /k keeps it finite and
+    # well-behaved at k=1 where (k-1) would divide by zero. Changing it to
+    # /(k-1) would shift peak selection, so keep the two forms consistent if
+    # you ever revisit this (see `_single_cluster_score`).
     norm_ratios = (num_terminals - ks) / ks
 
     edge = ~np.isfinite(betas) | (betas == 0)
@@ -223,6 +229,50 @@ def _vectorised_dp_row_scores(pc) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return betas, beta_ratios, scores
 
 
+def _vectorised_dp_row_scores_cached(
+    pc,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cached wrapper around ``_vectorised_dp_row_scores``.
+
+    The raw (betas, beta_ratios, scores) vectors are pure local functions of
+    ``dp_row`` and the scoring flags; entry ``i`` does not depend on any
+    later entry. So a vector computed at max_k = K can serve any request for
+    max_k' <= K by slicing the prefix. We cache at the largest max_k seen
+    within a stable (DP signature, DP cap, scoring flag) base, and
+    recompute on a miss.
+    """
+    requested = int(pc.max_k)
+    base_sig = (
+        pc._dp_cache_sig,
+        pc._dp_cap,
+        bool(getattr(pc, "use_penalized_beta_for_scoring", False)),
+    )
+
+    cached = pc._score_raw_arrays
+    cached_sig = pc._score_raw_base_sig
+    cached_cap = pc._score_raw_cap
+
+    if (
+        cached is not None
+        and cached_sig == base_sig
+        and cached_cap is not None
+        and requested <= cached_cap
+    ):
+        betas, ratios, scores = cached
+        return (
+            betas[:requested].copy(),
+            ratios[:requested].copy(),
+            scores[:requested].copy(),
+        )
+
+    betas, ratios, scores = _vectorised_dp_row_scores(pc)
+
+    pc._score_raw_arrays = (betas.copy(), ratios.copy(), scores.copy())
+    pc._score_raw_cap = requested
+    pc._score_raw_base_sig = base_sig
+    return betas, ratios, scores
+
+
 def calculate_scores(pc, plot: bool = False) -> None:
     if pc.k is not None:
         from .dp import cluster_map
@@ -237,7 +287,7 @@ def calculate_scores(pc, plot: bool = False) -> None:
             raise ConfigurationError(
                 "max_k must be set and positive to compute DP-based scores."
             )
-        beta_values, den_list, scores = _vectorised_dp_row_scores(pc)
+        beta_values, den_list, scores = _vectorised_dp_row_scores_cached(pc)
 
     scores[scores < 0] = 0
     beta_values[beta_values < 0] = 0
@@ -261,6 +311,11 @@ def calculate_scores(pc, plot: bool = False) -> None:
         ratios = np.clip(ratios, 0.0, 50.0)
         elbow_scores[1 : n - 1] = ratios
 
+    # Invariant (load-bearing): invalid entries only ever occur at the TAIL
+    # (out-of-range k), never in the interior — interior-infeasible k are mapped
+    # to score 0.0, not nan/inf. Downstream (find_score_peaks) relies on
+    # scores[i] == k=i+1 after this compaction; an interior nan/inf here would
+    # silently shift every k mapping, so keep infeasible-interior scores finite.
     invalid_mask = (
         np.isnan(scores)
         | np.isinf(scores)
