@@ -54,6 +54,9 @@ def _value_to_str(value: Optional[float]) -> Optional[str]:
     """Format a float branch-length value for display; returns None for zero/None."""
     if value is None or value == 0:
         return None
+    # Guard NaN/inf: int(nan) raises ValueError and would abort the whole plot.
+    if not np.isfinite(value):
+        return None
     return str(int(value)) if int(value) == value else str(value)
 
 
@@ -242,81 +245,88 @@ def plot_tree(
             vertical_lws.append(lw)
 
     def draw_clade(clade: Any, x_start: float, color: Any, lw: float) -> None:
-        x_here = x_posns.get(clade, 0.0)
-        y_here = y_posns.get(clade, 0.0)
+        # Iterative pre-order walk (explicit stack) instead of recursion, which
+        # overflows the Python stack on deep trees. Output is accumulated into
+        # shared line/marker/text collections, so visit order is immaterial.
+        stack: list[tuple[Any, float, Any, float]] = [(clade, x_start, color, lw)]
+        while stack:
+            clade, x_start, color, lw = stack.pop()
+            x_here = x_posns.get(clade, 0.0)
+            y_here = y_posns.get(clade, 0.0)
 
-        if hasattr(clade, "color") and clade.color is not None:
-            try:
-                color = clade.color.to_hex()
-            except Exception:
-                color = clade.color
+            if hasattr(clade, "color") and clade.color is not None:
+                try:
+                    color = clade.color.to_hex()
+                except Exception:
+                    color = clade.color
 
-        if hasattr(clade, "width") and clade.width is not None:
-            lw = float(clade.width) * float(plt.rcParams["lines.linewidth"])
+            if hasattr(clade, "width") and clade.width is not None:
+                lw = float(clade.width) * float(plt.rcParams["lines.linewidth"])
 
-        # Per-branch colouring (e.g. by cluster) overrides inherited color.
-        edge_color = color
-        if branch_color_func is not None:
-            try:
-                bc = branch_color_func(clade)
-                if bc is not None:
-                    edge_color = bc
-            except Exception:
-                pass
+            # Per-branch colouring (e.g. by cluster) overrides inherited color.
+            edge_color = color
+            if branch_color_func is not None:
+                try:
+                    bc = branch_color_func(clade)
+                    if bc is not None:
+                        edge_color = bc
+                except Exception:
+                    pass
 
-        draw_clade_lines(
-            use_linecollection=True,
-            orientation="horizontal",
-            y_here=y_here,
-            x_start=x_start,
-            x_here=x_here,
-            color=edge_color,
-            lw=lw,
-        )
-
-        if marker_func is not None and not (
-            hide_internal_nodes and not clade.is_terminal()
-        ):
-            marker = marker_func(clade)
-            if marker is not None:
-                m_size, m_color = marker
-                marker_x.append(x_here)
-                marker_y.append(y_here)
-                marker_sizes.append(m_size)
-                marker_colors.append(m_color)
-
-        lab = (
-            label_func(clade)
-            if callable(label_func)
-            else str(getattr(clade, "name", ""))
-        )
-        if lab not in (None, clade.__class__.__name__) and not (
-            hide_internal_nodes and not clade.is_terminal()
-        ):
-            text_x.append(x_here + min(0.02 * ax_scale, 1.0))
-            text_y.append(y_here)
-            texts.append(f" {lab}")
-            text_colors.append(get_label_color(lab))
-
-        if clade.clades:
-            y_top = y_posns.get(clade.clades[0], y_here)
-            y_bot = y_posns.get(clade.clades[-1], y_here)
-            # Vertical line at clade represents clade's internal structure
-            # (it joins clade's children). When branches are coloured by
-            # cluster, this line should match the horizontal entering clade
-            # — otherwise sub-cluster verticals stay grey while the
-            # horizontals are coloured, which looks broken.
             draw_clade_lines(
                 use_linecollection=True,
-                orientation="vertical",
+                orientation="horizontal",
+                y_here=y_here,
+                x_start=x_start,
                 x_here=x_here,
-                y_bot=y_bot,
-                y_top=y_top,
                 color=edge_color,
                 lw=lw,
             )
-            for child in clade:
-                draw_clade(child, x_here, edge_color, lw)
+
+            if marker_func is not None and not (
+                hide_internal_nodes and not clade.is_terminal()
+            ):
+                marker = marker_func(clade)
+                if marker is not None:
+                    m_size, m_color = marker
+                    marker_x.append(x_here)
+                    marker_y.append(y_here)
+                    marker_sizes.append(m_size)
+                    marker_colors.append(m_color)
+
+            lab = (
+                label_func(clade)
+                if callable(label_func)
+                else str(getattr(clade, "name", ""))
+            )
+            if lab not in (None, clade.__class__.__name__) and not (
+                hide_internal_nodes and not clade.is_terminal()
+            ):
+                text_x.append(x_here + min(0.02 * ax_scale, 1.0))
+                text_y.append(y_here)
+                texts.append(f" {lab}")
+                text_colors.append(get_label_color(lab))
+
+            if clade.clades:
+                y_top = y_posns.get(clade.clades[0], y_here)
+                y_bot = y_posns.get(clade.clades[-1], y_here)
+                # Vertical line at clade represents clade's internal structure
+                # (it joins clade's children). When branches are coloured by
+                # cluster, this line should match the horizontal entering clade
+                # — otherwise sub-cluster verticals stay grey while the
+                # horizontals are coloured, which looks broken.
+                draw_clade_lines(
+                    use_linecollection=True,
+                    orientation="vertical",
+                    x_here=x_here,
+                    y_bot=y_bot,
+                    y_top=y_top,
+                    color=edge_color,
+                    lw=lw,
+                )
+                # Push children reversed so they are processed left-to-right.
+                for child in reversed(list(clade)):
+                    stack.append((child, x_here, edge_color, lw))
 
     line_width = float(
         line_width if line_width is not None else plt.rcParams["lines.linewidth"]
@@ -438,17 +448,14 @@ def _get_y_positions(
             raise PlotError(f"Outgroup '{outgroup}' not found in tree")
         heights[normal_clades[0]] = maxheight
 
-    def calc_row(clade: Any) -> None:
-        for sub in clade:
-            if sub not in heights:
-                calc_row(sub)
+    # Iterative postorder (children before parents) so an internal node's row is
+    # the mean of its first/last child rows. Recursion here overflows the Python
+    # stack on deep (caterpillar/ladder) trees; this is O(n) and stack-safe.
+    for clade in tree.find_clades(order="postorder"):
         if clade.clades:
             heights[clade] = (
                 heights[clade.clades[0]] + heights[clade.clades[-1]]
             ) / 2.0
-
-    if tree.root.clades:
-        calc_row(tree.root)
 
     if adjust:
         sorted_clades = sorted(heights, key=heights.get)
@@ -461,6 +468,69 @@ def _get_y_positions(
         heights = new_heights
 
     return heights
+
+
+_MIXED_CLUSTER = object()
+
+
+def _cluster_mrcas(tree: Any, clusters_by_id: dict[int, list]) -> dict[int, Any]:
+    """MRCA node for every cluster, in a single O(n) postorder pass.
+
+    PhytClust clusters are clades, so a cluster's MRCA is the unique node whose
+    subtree leaves are exactly that cluster's members. We find it by tracking,
+    per node, whether all leaves below share one cluster id and how many there
+    are — replacing a per-cluster ``common_ancestor`` call (O(n·k) total). Any
+    cluster not resolved this way (e.g. a scattered outlier group) falls back to
+    ``common_ancestor``.
+    """
+    sizes = {cid: len(members) for cid, members in clusters_by_id.items()}
+    leaf_cid: dict[Any, int] = {}
+    for cid, members in clusters_by_id.items():
+        for m in members:
+            leaf_cid[m] = cid
+
+    uniform: dict[Any, Any] = {}
+    count: dict[Any, int] = {}
+    mrca: dict[int, Any] = {}
+
+    for node in tree.find_clades(order="postorder"):
+        if node.is_terminal():
+            cid = leaf_cid.get(node)
+            uniform[node] = cid
+            count[node] = 1 if cid is not None else 0
+        else:
+            u: Any = None
+            c = 0
+            for idx, child in enumerate(node.clades):
+                cu = uniform.get(child)
+                c += count.get(child, 0)
+                if idx == 0:
+                    u = cu
+                elif u is _MIXED_CLUSTER or cu is _MIXED_CLUSTER or cu != u:
+                    u = _MIXED_CLUSTER
+            uniform[node] = u
+            count[node] = c
+
+        u = uniform[node]
+        if (
+            u is not None
+            and u is not _MIXED_CLUSTER
+            and u in sizes
+            and count[node] == sizes[u]
+            and u not in mrca
+        ):
+            mrca[u] = node
+
+    for cid, members in clusters_by_id.items():
+        if cid not in mrca:
+            if len(members) == 1:
+                mrca[cid] = members[0]
+            else:
+                try:
+                    mrca[cid] = tree.common_ancestor(members)
+                except Exception:
+                    mrca[cid] = members[0]
+    return mrca
 
 
 def _draw_cluster_boxes(
@@ -505,6 +575,9 @@ def _draw_cluster_boxes(
     pad_x = xmax * box_pad_x_frac
     label_extent = xmax * 0.06
 
+    # All cluster MRCAs in one O(n) pass instead of common_ancestor per cluster.
+    mrca_by_cid = _cluster_mrcas(tree, clusters_by_id)
+
     for cid, members in clusters_by_id.items():
         if cid < 0:
             # Outliers — drawn as dashed-edge open boxes for visual distinction.
@@ -522,13 +595,7 @@ def _draw_cluster_boxes(
         y_min = min(ys) - box_pad_y
         y_max = max(ys) + box_pad_y
 
-        if len(members) == 1:
-            mrca = members[0]
-        else:
-            try:
-                mrca = tree.common_ancestor(members)
-            except Exception:
-                mrca = members[0]
+        mrca = mrca_by_cid.get(cid, members[0])
         x_left = x_posns.get(mrca, 0.0) - pad_x
         x_right = max(x_posns.get(m, 0.0) for m in members) + label_extent
 

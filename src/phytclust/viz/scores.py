@@ -68,7 +68,6 @@ def plot_scores(
         plt.tight_layout()
         return fig
     x_indices = np.arange(k_start, k_start + len(scores_slice))
-    data_min, data_max = np.nanmin(scores_slice), np.nanmax(scores_slice)
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 

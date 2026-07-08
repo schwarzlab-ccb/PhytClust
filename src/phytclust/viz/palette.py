@@ -11,24 +11,28 @@ import numpy as np
 import matplotlib.colors as mcolors
 from matplotlib.colors import ListedColormap
 
-# Base colors shared with the GUI palette.
+# Base colors for cluster fills. Same brand tones, led by red as before, but
+# ordered so that consecutive entries are always perceptually far apart (every
+# adjacent pair is >=~50 Lab units): with few clusters, neighbouring clusters
+# never get near-identical colours. This fixes the original order's collisions
+# (e.g. steel blue directly followed by indigo, olive next to teal).
 BASE_HEX: list[str] = [
     "#b84b4b",  # red
-    "#849060",  # olive
-    "#3d7c74",  # teal
-    "#6e3f8a",  # purple
-    "#ceb94b",  # gold
-    "#3f648a",  # steel blue
-    "#3f408a",  # indigo
-    "#da63aa",  # pink
-    "#c06f2e",  # amber brown
-    "#2f6f93",  # ocean blue
     "#4f8f4a",  # green
-    "#ad5c7a",  # rose
-    "#7a5d3b",  # earth
+    "#da63aa",  # pink
+    "#ceb94b",  # gold
+    "#3f408a",  # indigo
+    "#c06f2e",  # amber brown
+    "#5b6bb3",  # slate blue
+    "#849060",  # olive
+    "#6e3f8a",  # purple
     "#2f8a85",  # cyan teal
     "#8f4b7f",  # magenta plum
-    "#5b6bb3",  # slate blue
+    "#3d7c74",  # teal
+    "#ad5c7a",  # rose
+    "#2f6f93",  # ocean blue
+    "#7a5d3b",  # earth
+    "#3f648a",  # steel blue
 ]
 
 # Colorblind-safe accent palette (for score-plot peaks / bin labels)
