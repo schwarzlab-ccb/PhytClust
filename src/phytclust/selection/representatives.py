@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 import heapq
 
 from Bio.Phylo.BaseTree import Tree
@@ -49,6 +49,47 @@ def maximize_pd(tree: Tree, num_species: Optional[int] = None) -> list[Tuple[str
 
 
 # Distances used for ranking
+def _sum_distances_to_all_leaves(tree: Tree) -> dict[Any, float]:
+    """For every terminal, the sum of path distances to all other terminals.
+
+    Computed in O(n) with the standard reroot technique (two passes) instead of
+    O(n^2) pairwise ``tree.distance`` calls (each itself a path trace):
+
+    - postorder: ``cnt[node]`` = #leaves below, ``down[node]`` = sum of distances
+      from node to leaves below it;
+    - preorder: ``f[node]`` = sum of distances from node to *all* leaves, via
+      ``f[child] = f[node] + (L - 2*cnt[child]) * edge(child)``.
+
+    A leaf's distance to itself is 0, so ``f[leaf]`` is exactly its sum of
+    distances to every other leaf.
+    """
+    root = tree.root
+    cnt: dict[Any, int] = {}
+    down: dict[Any, float] = {}
+    for node in tree.find_clades(order="postorder"):
+        if node.is_terminal():
+            cnt[node] = 1
+            down[node] = 0.0
+        else:
+            c = 0
+            d = 0.0
+            for child in node.clades:
+                w = float(child.branch_length or 0.0)
+                c += cnt[child]
+                d += down[child] + cnt[child] * w
+            cnt[node] = c
+            down[node] = d
+
+    L = cnt[root]
+    f: dict[Any, float] = {root: down[root]}
+    for node in tree.find_clades(order="preorder"):
+        for child in node.clades:
+            w = float(child.branch_length or 0.0)
+            f[child] = f[node] + (L - 2 * cnt[child]) * w
+
+    return {n: f[n] for n in cnt if n.is_terminal()}
+
+
 def compute_species_distance(
     tree: Tree,
     terminals: list[str],
@@ -59,25 +100,21 @@ def compute_species_distance(
     Compute a distance measure for each terminal.
 
     distance_ref:
-        - 'all': sum of distances from this terminal to all other terminals  (O(n^2))
+        - 'all': sum of distances from this terminal to all other terminals
+          (O(n) via the reroot technique)
         - 'mrca': distance from this terminal to the MRCA of all 'terminals'
 
     Returns: dict {terminal_name: distance_value}
-
-    NOTE: For large trees, 'all' is O(n^2) over terminals since Bio.Phylo.distance
-    is invoked pairwise. Consider caching paths or using a distance matrix if this
-    becomes slow at scale.
     """
     distances: dict[str, float] = {}
 
     if distance_ref == "all":
-        for i, t in enumerate(terminals):
-            s = 0.0
-            for j, other in enumerate(terminals):
-                if i == j:
-                    continue
-                s += float(tree.distance(t, other))
-            distances[t] = s
+        by_node = _sum_distances_to_all_leaves(tree)
+        wanted = set(terminals)
+        for node, dist in by_node.items():
+            name = getattr(node, "name", None)
+            if name in wanted:
+                distances[name] = float(dist)
 
     elif distance_ref == "mrca":
         if not terminals:
@@ -135,18 +172,44 @@ def rank_terminal_nodes(
 
 
 # One representative per cluster
+_STRATEGY_MAP = {
+    # strategy -> (mode, distance_ref)
+    "central": ("minimize", "mrca"),   # leaf closest to the cluster MRCA
+    "divergent": ("maximize", "mrca"),  # leaf farthest from the cluster MRCA
+    "medoid": ("minimize", "all"),      # min total distance to cluster members
+}
+
+
 def select_representative_species(
     tree: Tree,
     clusters: dict[str, int],
     *,
-    mode: str = "maximize",
-    distance_ref: str = "mrca",
+    strategy: str = "central",
+    mode: Optional[str] = None,
+    distance_ref: Optional[str] = None,
 ) -> list[str]:
     """
-    Pick a single representative species per cluster using the chosen criterion.
+    Pick a single representative species per cluster.
 
     clusters: mapping {species_name -> cluster_id}
+
+    strategy (the simple knob — choose what "representative" means):
+        - "central"   : leaf *closest* to the cluster MRCA (default)
+        - "divergent" : leaf *farthest* from the cluster MRCA (most divergent)
+        - "medoid"    : leaf minimising total distance to all cluster members
+                        (O(n) per cluster via the reroot technique)
+
+    Advanced: pass ``mode`` ("minimize"/"maximize") and/or ``distance_ref``
+    ("mrca"/"all") to override the strategy mapping directly.
     """
+    if mode is None or distance_ref is None:
+        if strategy not in _STRATEGY_MAP:
+            raise ConfigurationError(
+                "strategy must be 'central', 'divergent', or 'medoid'"
+            )
+        s_mode, s_ref = _STRATEGY_MAP[strategy]
+        mode = mode or s_mode
+        distance_ref = distance_ref or s_ref
     # group by cluster
     by_cluster: dict[int, list[str]] = {}
     for sp, cid in clusters.items():
