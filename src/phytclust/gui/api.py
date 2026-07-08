@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import tempfile
+import threading
 import uuid
 from collections import OrderedDict
 from io import StringIO
@@ -63,6 +64,13 @@ def _normalize_newick(newick: str) -> str:
             j = i
             while j < n and newick[j] not in "(),;:'\"\\":
                 j += 1
+            if j == i:
+                # A stop-set char that no earlier branch consumed (e.g. a stray
+                # backslash). Emit it verbatim and advance so `i` always makes
+                # progress — otherwise the outer loop spins forever.
+                result.append(newick[i])
+                i += 1
+                continue
             token = newick[i:j]
             stripped = token.strip()
             if stripped and " " in stripped:
@@ -84,6 +92,12 @@ PUBLIC_MAX_TIPS: int = int(os.getenv("PHYTCLUST_MAX_TIPS", "10000"))
 # LRU result cache keyed by run_id (UUID). Holds last _CACHE_MAX results.
 _CACHE: OrderedDict[str, tuple[PhytClust, dict[str, Any]]] = OrderedDict()
 _CACHE_MAX = 20
+
+# Serializes /api/run. The reuse path mutates a shared PhytClust instance and
+# the module-level LAST_* globals, and the DP itself is not thread-safe, so two
+# concurrent runs on Starlette's threadpool would corrupt each other's results.
+# Correctness matters more than parallelism here, so runs are serialized.
+_RUN_LOCK = threading.Lock()
 
 # ------------------------------------------------------
 # Create the FastAPI app
@@ -236,6 +250,13 @@ def _construction_key(req: PhytclustRequest, newick: str) -> tuple:
 
 @app.post("/api/run")
 def run_phytclust(req: PhytclustRequest):
+    # Serialize compute + shared-state mutation so concurrent requests on the
+    # threadpool can't interleave and corrupt each other's results.
+    with _RUN_LOCK:
+        return _run_phytclust(req)
+
+
+def _run_phytclust(req: PhytclustRequest):
     global LAST_PC, LAST_RESULT, LAST_NEWICK, LAST_CONSTRUCTION_KEY
     notes: list[str] = []
 
@@ -370,8 +391,9 @@ def run_phytclust(req: PhytclustRequest):
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PhytClust error: {e}")
+    except Exception:
+        logger.exception("PhytClust run failed")
+        raise HTTPException(status_code=500, detail="PhytClust internal error.")
 
     clusters_json = _serialize_clusters(result.get("clusters"))
     scores = result.get("scores")
@@ -408,6 +430,19 @@ def run_phytclust(req: PhytclustRequest):
     alpha_details = result.get("alpha_details") or []
     alphas = result.get("alphas") or []
 
+    bin_ranges = None
+    peaks_by_resolution = None
+    if result.get("mode") == "resolution":
+        raw_ranges = getattr(pc, "bin_ranges_current", None)
+        if raw_ranges:
+            bin_ranges = [[int(lo), int(hi)] for lo, hi in raw_ranges]
+        raw_pbr = getattr(pc, "peaks_by_resolution", None)
+        if isinstance(raw_pbr, dict):
+            peaks_by_resolution = {
+                str(label): [int(k) for k in (ks or [])]
+                for label, ks in raw_pbr.items()
+            }
+
     payload = {
         "mode": result.get("mode"),
         "selected_k": result.get("selected_k"),
@@ -415,6 +450,8 @@ def run_phytclust(req: PhytclustRequest):
         "k": result.get("k"),
         "ks": result.get("ks"),
         "peaks": result.get("peaks"),
+        "bin_ranges": bin_ranges,
+        "peaks_by_resolution": peaks_by_resolution,
         "alphas": [_safe_float(a) for a in alphas],
         "alpha_details": [
             {k: (_safe_float(v) if isinstance(v, (int, float)) else v) for k, v in d.items()}
@@ -482,8 +519,11 @@ def save_results(req: SaveRequest):
             "results_dir": req.results_dir,
             "filename": req.filename,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save results: {e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("Failed to save results")
+        raise HTTPException(status_code=500, detail="Failed to save results.")
 
 
 class ExportTSVRequest(BaseModel):
@@ -516,5 +556,8 @@ def export_tsv(req: ExportTSVRequest):
             )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export TSV: {e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("Failed to export TSV")
+        raise HTTPException(status_code=500, detail="Failed to export TSV.")
