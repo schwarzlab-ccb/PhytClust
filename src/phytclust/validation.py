@@ -64,6 +64,27 @@ def validate_and_set_outgroup(
     return tree, outgroup
 
 
+def _terminal_maps(tree: Tree) -> Tuple[dict[Any, list[Any]], dict[Any, int]]:
+    """Build {node -> [terminal clades]} and {node -> #terminals} in one O(n) pass.
+
+    Extends children's terminal lists bottom-up rather than calling
+    ``node.get_terminals()`` per node (which re-walks each subtree, O(n·depth)).
+    """
+    node_terminals: dict[Any, list[Any]] = {}
+    terminal_count: dict[Any, int] = {}
+    for node in tree.find_clades(order="postorder"):
+        if node.is_terminal():
+            node_terminals[node] = [node]
+            terminal_count[node] = 1
+        else:
+            terms: list[Any] = []
+            for child in node.clades:
+                terms.extend(node_terminals[child])
+            node_terminals[node] = terms
+            terminal_count[node] = len(terms)
+    return node_terminals, terminal_count
+
+
 def prune_outgroup(
     tree: Tree, outgroup: Optional[str]
 ) -> Tuple[dict[Any, list[Any]], dict[Any, int]]:
@@ -73,9 +94,7 @@ def prune_outgroup(
     Otherwise we simply prune the outgroup clade.
     """
     if outgroup is None:
-        node_terminals = {node: node.get_terminals() for node in tree.find_clades()}
-        terminal_count = {node: len(terms) for node, terms in node_terminals.items()}
-        return node_terminals, terminal_count
+        return _terminal_maps(tree)
 
     outgroup_clade = next((cl for cl in tree.find_clades(name=outgroup)), None)
     if outgroup_clade is None:
@@ -95,9 +114,7 @@ def prune_outgroup(
     else:
         tree.prune(outgroup_clade)
 
-    node_terminals = {node: node.get_terminals() for node in tree.find_clades()}
-    terminal_count = {node: len(terms) for node, terms in node_terminals.items()}
-    return node_terminals, terminal_count
+    return _terminal_maps(tree)
 
 
 def is_outgroup_valid(tree: Tree, outgroup: str) -> bool:
@@ -164,7 +181,13 @@ def rename_nodes(tree: Tree, outgroup: Optional[str] = None) -> None:
             while new_name in node_names:
                 suffix += 1
                 new_name = f"{base}_{suffix}"
-            logger.info(f"Node name '{base}' is duplicated. Renaming to '{new_name}'")
+            logger.warning(
+                "Node name '%s' is duplicated; renaming to '%s'. "
+                "Output rows will reference the renamed label — this usually "
+                "signals duplicate taxa in the input.",
+                base,
+                new_name,
+            )
             node.name = new_name
 
         node_names.add(node.name)
@@ -207,20 +230,46 @@ def resolve_polytomies(tree: Tree) -> Tree:
 
 def ensure_branch_lengths(tree: Tree) -> None:
     """
-    If the tree has no positive branch lengths (i.e. all are None or 0),
-    set all non-root branches to length 1.0
+    Normalize branch lengths and warn on degenerate inputs.
+
+    - If *no* branch has a positive length (all None/0), set every non-root
+      branch to 1.0 (unweighted tree).
+    - If lengths are *mixed* (some present, some missing/zero), leave them as-is
+      but warn loudly: the missing branches are treated as length 0.0 by the DP,
+      which can yield zero within-cluster dispersion and undefined (inf) alpha.
+    - Warn on any negative branch length (geometrically meaningless).
     """
     clades = [cl for cl in tree.find_clades() if cl is not tree.root]
-    has_positive_len = any((cl.branch_length or 0.0) > 0.0 for cl in clades)
 
-    if has_positive_len:
+    n_missing = sum(1 for cl in clades if not ((cl.branch_length or 0.0) > 0.0))
+    n_negative = sum(1 for cl in clades if (cl.branch_length or 0.0) < 0.0)
+
+    if n_negative:
+        logger.warning(
+            "%d of %d branches have a negative length; distances and the "
+            "clustering objective are only meaningful for non-negative branches.",
+            n_negative,
+            len(clades),
+        )
+
+    if n_missing == 0:
+        return
+
+    if n_missing == len(clades):
+        logger.warning(
+            "Tree has no branch lengths. "
+            "PhytClust will assume all branches have length 1.0."
+        )
+        for cl in clades:
+            if cl.branch_length is None or cl.branch_length == 0.0:
+                cl.branch_length = 1.0
         return
 
     logger.warning(
-        "Tree has no branch lengths. "
-        "PhytClust will assume all branches have length 1.0."
+        "%d of %d branches have no positive length; they are treated as "
+        "length 0.0, which can produce zero within-cluster dispersion and "
+        "undefined (inf) alpha for the affected clusters. Provide complete "
+        "branch lengths to avoid this.",
+        n_missing,
+        len(clades),
     )
-
-    for cl in clades:
-        if cl.branch_length is None or cl.branch_length == 0.0:
-            cl.branch_length = 1.0
