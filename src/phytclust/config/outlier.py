@@ -24,6 +24,9 @@ class OutlierConfig:
     # If False (default), cost is minimised first, outlier count is tie-breaker.
     prefer_fewer: bool = False
 
+    # If True, the outlier-ratio penalty shapes the DP cost function.
+    penalty_enabled: bool = False
+
     # Weight and mode for the outlier-ratio penalty in the DP cost function.
     ratio_weight: float = 10.0
     ratio_mode: str = "exp"  # "exp", "inverse", or "power"
