@@ -6,7 +6,7 @@
 import { state } from "../state.js";
 import { showToast } from "../ui/toast.js";
 import { escapeHtmlAttr } from "../utils.js";
-import { drawComparisonBarsInto } from "../tree/draw.js";
+import { drawComparisonBarsInto } from "../tree/compare.js";
 import { generateClusterColors, getThemeColors } from "../colors.js";
 
 function listTreeLeaves() {

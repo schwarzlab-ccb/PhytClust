@@ -489,6 +489,34 @@ class SaveRequest(BaseModel):
     output_all: bool = False
 
 
+def _safe_results_dir(raw: str) -> Path:
+    """Confine a client-supplied output directory to the server's cwd.
+
+    ``io.save._safe_filename`` already stops the filename escaping its
+    directory; this is the same guard one level up, so that the directory
+    itself cannot be steered anywhere on the filesystem. Restart the server
+    in the target directory to write somewhere else.
+    """
+    root = Path.cwd().resolve()
+    try:
+        candidate = Path(raw)
+        candidate = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    except (OSError, ValueError) as e:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid output directory {raw!r}: {e}"
+        )
+    if candidate != root and not candidate.is_relative_to(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Output directory {raw!r} is outside the server's working "
+                f"directory ({root}). Use a path inside it, or restart the GUI "
+                "from where you want the results written."
+            ),
+        )
+    return candidate
+
+
 @app.post("/api/save")
 def save_results(req: SaveRequest):
     if PUBLIC_MODE:
@@ -498,8 +526,8 @@ def save_results(req: SaveRequest):
         )
     pc, _ = _require_last_result()
 
+    out_dir = _safe_results_dir(req.results_dir)
     try:
-        out_dir = Path(req.results_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         raise HTTPException(
@@ -509,7 +537,7 @@ def save_results(req: SaveRequest):
 
     try:
         pc.save(
-            results_dir=req.results_dir,
+            results_dir=str(out_dir),
             top_n=req.top_n,
             filename=req.filename,
             outlier=req.outlier,
@@ -517,7 +545,7 @@ def save_results(req: SaveRequest):
         )
         return {
             "status": "ok",
-            "results_dir": req.results_dir,
+            "results_dir": str(out_dir),
             "filename": req.filename,
         }
     except ValueError as e:

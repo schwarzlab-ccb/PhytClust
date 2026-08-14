@@ -16,7 +16,9 @@ import { exportSvgFromEl, exportPngFromEl, exportTSV, saveToServer, copySvgToCli
 import { wireAppearanceTrigger } from "./ui/appearance_panel.js";
 import { collectSession, applySession, sessionSizeWarning } from "./session.js";
 import { runPhytClust } from "./api.js";
-import { drawTree, fitTree, fitCompare, clearAllCollapsedFlags, hideNodeContextMenu, showNodeContextMenu, getNodeCustom, nodeDisplayName, clearTree } from "./tree/draw.js";
+import { drawTree, fitTree, clearAllCollapsedFlags, clearTree } from "./tree/draw.js";
+import { hideNodeContextMenu, showNodeContextMenu, getNodeCustom, nodeDisplayName } from "./tree/nodes.js";
+import { fitCompare } from "./tree/compare.js";
 import { drawComparison, makeCompareConfig, renderCompareConfigList, buildComparisonTSV, getClustersForK, normalizeClustersForLeaves } from "./views/compare.js";
 import { drawOptimalK } from "./views/optimal_k.js";
 import {
