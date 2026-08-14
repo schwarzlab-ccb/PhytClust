@@ -106,6 +106,88 @@ def prepare_tree(pc) -> None:
         )
 
 
+#: Largest anti-diagonal workspace we will allocate, in elements. Above this
+#: the per-k loop is used instead: it never materialises the whole grid, so it
+#: stays cheaper for big square nodes where the grid buys nothing.
+_BATCH_MAX_CELLS = 4_000_000
+
+#: Below this many states the per-k loop is already cheaper than setting up
+#: the grid (measured: a 3x3 node is ~1.2x faster through the loop).
+_BATCH_MIN_STATES = 8
+
+
+def _batch_worth_it(left_len: int, right_len: int, n_states: int) -> bool:
+    if n_states < _BATCH_MIN_STATES:
+        return False
+    ncol = min(left_len + right_len - 1, n_states)
+    return min(left_len, right_len) * ncol <= _BATCH_MAX_CELLS
+
+
+def _fill_row_batched(
+    left_raw, right_raw, left_ns, right_ns,
+    n_states, atol_scale,
+    raw_array, total_array, ns_array, backptr_array,
+    pc_for_root, k_offset,
+) -> None:
+    """Fill a node's whole DP row in one pass instead of one pass per k.
+
+    Cell (i, j) of ``left[i] + right[j]`` yields state k = i + j + 1, so every
+    k is one anti-diagonal of that grid. Shifting row i right by i turns those
+    diagonals into columns, after which each reduction is a single column-wise
+    call covering all k at once. The smaller child becomes the row axis, so the
+    one Python-level loop runs min(len) times.
+    """
+    ll, rl = len(left_raw), len(right_raw)
+    swapped = ll > rl
+    if swapped:
+        left_raw, right_raw = right_raw, left_raw
+        left_ns, right_ns = right_ns, left_ns
+        ll, rl = rl, ll
+
+    ncol = min(ll + rl - 1, n_states)
+    big_ns = np.iinfo(np.int32).max
+    grid = np.full((ll, ll + rl - 1), np.inf, dtype=np.float64)
+    grid_ns = np.full((ll, ll + rl - 1), big_ns, dtype=np.int64)
+    for i in range(ll):
+        grid[i, i : i + rl] = left_raw[i] + right_raw
+        grid_ns[i, i : i + rl] = left_ns[i] + right_ns
+    grid = grid[:, :ncol]
+    grid_ns = grid_ns[:, :ncol]
+
+    col_min = grid.min(axis=0)
+    atol = np.maximum(1e-12, atol_scale * np.maximum(1.0, np.abs(col_min)))
+    tied = grid <= (col_min + atol)[None, :]
+    min_ns = np.where(tied, grid_ns, big_ns).min(axis=0)
+    cand = tied & (grid_ns == min_ns[None, :])
+    # The per-k loop breaks remaining ties by smallest left-child index. Rows
+    # are the left child only when we did not swap; when we did, row r means
+    # original left index (column - r), so the smallest is the LAST candidate.
+    rows = (ll - 1) - cand[::-1].argmax(axis=0) if swapped else cand.argmax(axis=0)
+
+    feasible = np.isfinite(col_min)
+    cols = np.flatnonzero(feasible)
+    if cols.size == 0:
+        return
+    sel = rows[cols]
+    ks = cols + k_offset
+    raw_array[ks] = grid[sel, cols]
+    total_array[ks] = raw_array[ks]
+    ns_array[ks] = grid_ns[sel, cols]
+    left_idx = (cols - sel) if swapped else sel
+    backptr_array[0, ks] = left_idx
+    backptr_array[1, ks] = (ks - 1) - left_idx
+
+    if pc_for_root is not None:
+        n_still = np.count_nonzero(cand[:, cols], axis=0)
+        for pos in np.flatnonzero(n_still > 1):
+            col = cols[pos]
+            pc_for_root._root_ties[int(col + k_offset) + 1] = {
+                "n_solutions": int(n_still[pos]),
+                "total_score": float(col_min[col]),
+                "outlier_count": int(min_ns[col]),
+            }
+
+
 def compute_dp_table(pc) -> None:
     tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
     nodes = list(iter_clades(tree.root, "postorder"))
@@ -296,6 +378,29 @@ def compute_dp_table(pc) -> None:
         # Hoisting these out of the k-loop avoids ``np.arange`` per iteration.
         left_len = len(left_raw)
         right_len = len(right_raw)
+
+        if (
+            use_outlier
+            and not pen_active
+            and not prefer_fewer
+            and _batch_worth_it(left_len, right_len, n_states)
+        ):
+            _fill_row_batched(
+                left_raw, right_raw, left_ns, right_ns,
+                n_states, atol_scale,
+                raw_array, total_array, ns_array, backptr_array,
+                pc if node is tree.root else None, k_offset=1,
+            )
+            pc.raw_dp_table[node_id] = raw_array
+            pc.dp_table[node_id] = total_array
+            pc.backptr[node_id] = backptr_array
+            pc._n_small[node_id] = ns_array
+            if not preserve_dp_tables:
+                for cid in (left_id, right_id):
+                    pc.dp_table[cid] = None
+                    pc.raw_dp_table[cid] = None
+                    pc._n_small[cid] = None
+            continue
 
         for k in range(1, n_states + 1):
             max_i = min(k - 1, left_len - 1)
