@@ -4,7 +4,6 @@ from Bio import Phylo
 from Bio.Phylo.BaseTree import Clade
 
 from phytclust.algo.core import PhytClust
-from phytclust.algo.dp import compute_dp_table
 from phytclust.exceptions import ConfigurationError, InvalidKError
 
 TREE_PATH = pathlib.Path(__file__).parent.parent / "examples" / "sample_tree.nwk"

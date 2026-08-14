@@ -105,13 +105,12 @@ class TestClusterPlot:
 
     def test_plot_clusters_with_custom_cmap(self):
         """Test plot_clusters with custom colormap."""
-        import matplotlib.cm as cm
-
         tree = _load_tree()
         pc = PhytClust(tree=tree)
         pc.run(k=2, plot_scores=False)
 
-        plot_clusters(pc, cmap=cm.get_cmap("viridis"), save=False)
+        # plt.get_cmap, not matplotlib.cm.get_cmap, which 3.9 removed.
+        plot_clusters(pc, cmap=plt.get_cmap("viridis"), save=False)
 
     def test_plot_clusters_with_no_clusters_handled(self):
         """Test that plot_clusters handles missing clusters gracefully."""

@@ -3,7 +3,7 @@
 import pathlib
 import pytest
 from Bio import Phylo
-from Bio.Phylo.BaseTree import Tree, Clade
+from Bio.Phylo.BaseTree import Tree
 
 from phytclust.validation import (
     validate_and_set_outgroup,

@@ -1,7 +1,6 @@
 """Tests for metrics module."""
 
 import pathlib
-import pytest
 from Bio import Phylo
 import numpy as np
 

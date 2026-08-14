@@ -74,3 +74,12 @@ Tracker = "https://github.com/schwarzlab-ccb/PhytClust/issues"
 
 [project.scripts]
 phytclust = "phytclust.cli:main"
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Deliberately narrow: rules that catch real defects, and that the tree
+# passes today. Widening this (UP, I, B, SIM) means a bulk reformat first.
+# PIE794 catches a class field defined twice, which Python accepts silently.
+select = ["F", "E9", "PIE794"]
