@@ -124,7 +124,7 @@ def _batch_worth_it(left_len: int, right_len: int, n_states: int) -> bool:
 
 def _fill_row_batched(
     left_raw, right_raw, left_ns, right_ns,
-    n_states, atol_scale,
+    n_states, atol_scale, dtype,
     raw_array, total_array, ns_array, backptr_array,
     pc_for_root, k_offset,
 ) -> None:
@@ -145,7 +145,9 @@ def _fill_row_batched(
 
     ncol = min(ll + rl - 1, n_states)
     big_ns = np.iinfo(np.int32).max
-    grid = np.full((ll, ll + rl - 1), np.inf, dtype=np.float64)
+    # Must match the DP arrays: under dp_float32 a float64 grid would round
+    # differently from the per-k loop and pick different splits.
+    grid = np.full((ll, ll + rl - 1), np.inf, dtype=dtype)
     grid_ns = np.full((ll, ll + rl - 1), big_ns, dtype=np.int64)
     for i in range(ll):
         grid[i, i : i + rl] = left_raw[i] + right_raw
@@ -386,7 +388,7 @@ def compute_dp_table(pc) -> None:
         ):
             _fill_row_batched(
                 left_raw, right_raw, left_ns, right_ns,
-                n_states, atol_scale,
+                n_states, atol_scale, dtype,
                 raw_array, total_array, ns_array, backptr_array,
                 pc if node is tree.root else None, k_offset=1,
             )
