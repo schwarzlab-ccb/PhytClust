@@ -18,6 +18,7 @@ from .dp_utils import (
     eff_length,
     penalty_active,
     subtree_all_zero,
+    dtype_eps,
     tie_atol,
     validate_args as _validate_args,
 )
@@ -122,6 +123,8 @@ def compute_dp_table(pc) -> None:
     # float64: the score forms (beta_1 - beta)/beta, and float32's mantissa
     # gets swamped by tiny late-k beta. float32 is opt-in for memory-bound runs.
     dtype = np.float32 if getattr(pc, "dp_float32", False) else np.float64
+    # tie_atol inlined in the k-loop below; only this factor depends on dtype.
+    atol_scale = 8.0 * dtype_eps(dtype)
 
     dp_cap = getattr(pc, "_dp_cap", None)
     if dp_cap is not None:
@@ -337,7 +340,7 @@ def compute_dp_table(pc) -> None:
                 min_t = float(total_scores.min())
                 if not np.isfinite(min_t):
                     continue
-                atol = tie_atol(min_t, dtype)
+                atol = max(1e-12, atol_scale * max(1.0, abs(min_t)))
                 tied_mask = total_scores <= min_t + atol
                 min_n = int(n_sm[tied_mask].min())
                 cand = tied_mask & (n_sm == min_n)
@@ -363,7 +366,7 @@ def compute_dp_table(pc) -> None:
                 min_raw = float(raw_scores.min())
                 if not np.isfinite(min_raw):
                     continue
-                atol = tie_atol(min_raw, dtype)
+                atol = max(1e-12, atol_scale * max(1.0, abs(min_raw)))
                 tied_mask = raw_scores <= min_raw + atol
                 n_tied = int(np.count_nonzero(tied_mask))
                 if n_tied > 1:

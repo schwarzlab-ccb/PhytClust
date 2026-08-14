@@ -3,6 +3,22 @@ import numpy as np
 from ..exceptions import ConfigurationError, InvalidKError
 
 
+_EPS_CACHE: dict = {}
+
+
+def dtype_eps(dtype) -> float:
+    """``np.finfo(dtype).eps``, cached.
+
+    finfo builds a machine-limits object on every call; the DP asks for this
+    once per k per node, and the answer only depends on the dtype.
+    """
+    eps = _EPS_CACHE.get(dtype)
+    if eps is None:
+        eps = float(np.finfo(dtype).eps)
+        _EPS_CACHE[dtype] = eps
+    return eps
+
+
 def tie_atol(value: float, dtype) -> float:
     """Absolute tolerance for treating two DP costs as tied.
 
@@ -11,8 +27,7 @@ def tie_atol(value: float, dtype) -> float:
     outlier tie-break silently degrades. Scale by the dtype epsilon and the
     magnitude, keeping a 1e-12 floor to preserve the previous float64 behaviour.
     """
-    eps = float(np.finfo(dtype).eps)
-    return max(1e-12, 8.0 * eps * max(1.0, abs(float(value))))
+    return max(1e-12, 8.0 * dtype_eps(dtype) * max(1.0, abs(float(value))))
 
 
 def validate_args(pc) -> None:
