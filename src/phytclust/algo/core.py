@@ -26,6 +26,7 @@ from ..algo.dp import (
 from ..algo.scoring import calculate_scores, find_score_peaks
 from ..config import OutlierConfig, PeakConfig, RuntimeConfig
 from ..metrics.indices import cluster_alpha
+from ..utils.traversal import iter_clades
 
 logger = logging.getLogger("phytclust")
 
@@ -149,8 +150,7 @@ class PhytClust:
     soft_polytomy_max_degree: int = 12
     preserve_dp_tables: bool = False
 
-    # Accumulate the DP in float32 (memory-saving, opt-in) instead of the
-    # float64 default. Only worth it on very large trees; costs score precision.
+    # float32 DP: saves memory on very large trees, costs score precision.
     dp_float32: bool = False
 
     compute_all_clusters: bool = False
@@ -174,16 +174,12 @@ class PhytClust:
         self.alpha_by_k: dict[int, dict[str, Any]] = {}
 
         self._dp_ready = False
-        # Full cache key for the DP table: tree hash + every parameter that
-        # changes the contents of dp_table/raw_dp_table/backptr.
+        # Tree hash + every parameter that changes the DP contents.
         self._dp_cache_sig: Optional[tuple] = None
-        # Max k the cached DP arrays were sized for. Grows monotonically
-        # within a stable signature so a later call asking for a smaller k
-        # is a pure cache hit.
+        # Grows monotonically, so asking for a smaller k is a cache hit.
         self._dp_cap: Optional[int] = None
-        # Cached raw outputs of _vectorised_dp_row_scores (betas, ratios,
-        # scores) plus the max_k they were computed at. Lets shrinking max_k
-        # be served by slicing instead of recomputing.
+        # _vectorised_dp_row_scores outputs; shrinking max_k slices instead
+        # of recomputing.
         self._score_raw_arrays: Optional[tuple] = None
         self._score_raw_cap: Optional[int] = None
         self._score_raw_base_sig: Optional[tuple] = None
@@ -214,9 +210,17 @@ class PhytClust:
         return f"PhytClust({', '.join(parts)})"
 
     def _hash_tree(self) -> int:
-        """Tree fingerprint, used to detect modifications."""
+        """Tree fingerprint, used to detect modifications.
+
+        Hashes topology, names and branch lengths directly. ``format("newick")``
+        would serialise the whole tree to a string on every cache check, which
+        on a few thousand tips costs more than the check saves.
+        """
         try:
-            return hash(self.tree.format("newick"))
+            acc = 0
+            for node in iter_clades(self.tree.root, "preorder"):
+                acc = hash((acc, node.name, node.branch_length, len(node.clades)))
+            return acc
         except Exception:
             return hash(repr(self.tree))
 

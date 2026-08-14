@@ -8,6 +8,7 @@ from typing import Any, Optional, Tuple
 from Bio.Phylo.BaseTree import Clade, Tree
 
 from .exceptions import InvalidTreeError
+from .utils.traversal import iter_clades, nonterminals, terminals
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ def _terminal_maps(tree: Tree) -> Tuple[dict[Any, list[Any]], dict[Any, int]]:
     """
     node_terminals: dict[Any, list[Any]] = {}
     terminal_count: dict[Any, int] = {}
-    for node in tree.find_clades(order="postorder"):
+    for node in iter_clades(tree.root, "postorder"):
         if node.is_terminal():
             node_terminals[node] = [node]
             terminal_count[node] = 1
@@ -129,7 +130,7 @@ def validate_tree(tree: Tree, outgroup: Optional[str] = None) -> None:
     merge_single_child_clades(tree)
 
     polytomy_nodes = []
-    for node in tree.get_nonterminals():
+    for node in nonterminals(tree.root):
         children = node.clades
         if len(children) > 2 and all(
             getattr(c, "name", None) != outgroup for c in children
@@ -159,7 +160,7 @@ def rename_nodes(tree: Tree, outgroup: Optional[str] = None) -> None:
     node_names = set([outgroup]) if outgroup else set()
     internal_node_counter = 0
 
-    for node in tree.get_nonterminals() + tree.get_terminals():
+    for node in list(nonterminals(tree.root)) + list(terminals(tree.root)):
         name = getattr(node, "name", None)
 
         if not name or (outgroup and name == outgroup and outgroup_count > 1):
@@ -238,7 +239,7 @@ def ensure_branch_lengths(tree: Tree) -> None:
       which can yield zero within-cluster dispersion and undefined (inf) alpha.
     - Warn on any negative branch length (geometrically meaningless).
     """
-    clades = [cl for cl in tree.find_clades() if cl is not tree.root]
+    clades = [cl for cl in iter_clades(tree.root) if cl is not tree.root]
 
     n_missing = sum(1 for cl in clades if not ((cl.branch_length or 0.0) > 0.0))
     n_negative = sum(1 for cl in clades if (cl.branch_length or 0.0) < 0.0)

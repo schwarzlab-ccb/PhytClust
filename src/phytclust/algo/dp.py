@@ -12,6 +12,7 @@ from ..exceptions import (
     InvalidClusteringError,
 )
 from .dp_polytomy import compute_polytomy_dp
+from ..utils.traversal import iter_clades
 from .dp_utils import (
     cluster_formation_penalty,
     eff_length,
@@ -45,7 +46,7 @@ def prepare_tree(pc) -> None:
     # Log polytomy summary
     poly_degrees = [
         len(n.clades)
-        for n in pc.tree.find_clades()
+        for n in iter_clades(pc.tree.root)
         if not n.is_terminal() and len(n.clades) > 2
     ]
     if poly_degrees:
@@ -62,12 +63,10 @@ def prepare_tree(pc) -> None:
     else:
         logger.debug("Tree is fully bifurcating (no polytomies).")
 
-    # Single postorder pass: build terminal lists and counts together.
-    # n.get_terminals() per node would re-walk each subtree (O(N · depth));
-    # extending children's lists bottom-up is O(N).
+    # One postorder pass, O(N); get_terminals() per node would be O(N · depth).
     pc.name_leaves_per_node = {}
     pc.num_leaves_per_node = {}
-    for n in pc.tree.find_clades(order="postorder"):
+    for n in iter_clades(pc.tree.root, "postorder"):
         if n.is_terminal():
             pc.name_leaves_per_node[n] = [n]
             pc.num_leaves_per_node[n] = 1
@@ -89,9 +88,7 @@ def prepare_tree(pc) -> None:
 
     pc._tree_wo_outgroup = None
     if pc.outgroup:
-        # Newick round-trip is much faster than copy.deepcopy on large trees
-        # (deepcopy walks every Bio.Phylo node and cross-reference). Falls
-        # back to deepcopy if anything in the tree fails to serialize.
+        # Newick round-trip beats copy.deepcopy on large trees.
         try:
             from io import StringIO
             from Bio import Phylo as _Phylo
@@ -110,7 +107,7 @@ def prepare_tree(pc) -> None:
 
 def compute_dp_table(pc) -> None:
     tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
-    nodes = list(tree.find_clades(order="postorder"))
+    nodes = list(iter_clades(tree.root, "postorder"))
     pc.postorder_nodes = nodes
     num_nodes = len(nodes)
     pc.node_to_id = {node: i for i, node in enumerate(nodes)}
@@ -122,11 +119,8 @@ def compute_dp_table(pc) -> None:
     pc.cluster_cost = {}
     pc._root_ties = {}
 
-    # Accumulate in float64 by default. The score forms (beta_1 - beta)/beta,
-    # a difference of large near-equal sums; float32's ~7-digit mantissa can
-    # be swamped by tiny late-k beta on trees with a large total dispersion.
-    # float32 stays available (opt-in) for very large trees where the DP
-    # frontier's memory footprint is the binding constraint.
+    # float64: the score forms (beta_1 - beta)/beta, and float32's mantissa
+    # gets swamped by tiny late-k beta. float32 is opt-in for memory-bound runs.
     dtype = np.float32 if getattr(pc, "dp_float32", False) else np.float64
 
     dp_cap = getattr(pc, "_dp_cap", None)
@@ -152,9 +146,8 @@ def compute_dp_table(pc) -> None:
         getattr(pc, "preserve_dp_tables", False) or logger.isEnabledFor(logging.DEBUG)
     )
 
-    # When the outlier penalty is active, ``dp_table`` (total) carries
-    # raw + per-cluster penalty and the DP minimises it; otherwise ``dp_table``
-    # simply aliases ``raw_dp_table`` (one array instead of two identical ones).
+    # With a penalty, dp_table carries raw + penalty and the DP minimises it.
+    # Without one it aliases raw_dp_table rather than duplicating it.
     pen_active = penalty_active(pc)
     if pen_active and getattr(pc, "optimize_polytomies", True) and any(
         (not n.is_terminal()) and len(n.clades) > 2 for n in nodes
@@ -308,18 +301,11 @@ def compute_dp_table(pc) -> None:
             if min_i > max_i:
                 continue
 
-            # Fast path: no outlier handling. This is the overwhelmingly
-            # common case and used to dominate DP time via ``np.isclose``,
-            # ``np.flatnonzero``, and ``np.any`` on every k-iteration at
-            # every binary node. Here we do a single fused add + argmin,
-            # which is ~4-6x faster per iteration in pure NumPy and gives
-            # identical results (``np.argmin`` is tie-deterministic and
-            # returns the first occurrence of the minimum, matching the
-            # previous ``tied[0]`` selection).
+            # Fused add + argmin. Only reachable with size_threshold=None,
+            # since the default of 2 turns outlier handling on.
             if not use_outlier:
-                # Slice left_raw forward and right_raw reversed so that
-                # element-wise addition yields the same pairing as
-                # ``left_raw[i] + right_raw[k-1-i]`` for i in [min_i, max_i].
+                # right_raw reversed so element-wise addition pairs as
+                # left_raw[i] + right_raw[k-1-i] for i in [min_i, max_i].
                 left_slice = left_raw[min_i : max_i + 1]
                 right_slice = right_raw[k - 1 - max_i : k - min_i][::-1]
                 raw_scores = left_slice + right_slice
@@ -335,74 +321,71 @@ def compute_dp_table(pc) -> None:
                 backptr_array[1, k] = k - 1 - (min_i + best_local)
                 continue
 
-            # Outlier-aware path (unchanged semantics).
-            i_vals = np.arange(min_i, max_i + 1)
-            j_vals = k - 1 - i_vals
-
-            raw_scores = left_raw[i_vals] + right_raw[j_vals]
-
-            finite_mask = np.isfinite(raw_scores)
-            if not np.any(finite_mask):
-                continue
-            finite_idx = np.flatnonzero(finite_mask)
-
-            n_sm = left_ns[i_vals] + right_ns[j_vals]
+            # Outlier-aware path. Same contiguous-slice pairing as the fast
+            # path above: right_* reversed so element i of the sum is
+            # left[min_i + i] + right[k - 1 - (min_i + i)]. Avoids building
+            # index arrays and gathering through them once per k.
+            rlo, rhi = k - 1 - max_i, k - min_i
+            raw_scores = left_raw[min_i : max_i + 1] + right_raw[rlo:rhi][::-1]
+            n_sm = left_ns[min_i : max_i + 1] + right_ns[rlo:rhi][::-1]
 
             if pen_active:
                 # Minimise the penalised objective (raw + per-cluster penalty),
                 # carried in the children's total arrays; report the raw WSS of
                 # the chosen split so scoring stays geometry-true.
-                total_scores = left_total[i_vals] + right_total[j_vals]
-                tf = total_scores[finite_idx]
-                min_t = float(np.min(tf))
+                total_scores = left_total[min_i : max_i + 1] + right_total[rlo:rhi][::-1]
+                min_t = float(total_scores.min())
+                if not np.isfinite(min_t):
+                    continue
                 atol = tie_atol(min_t, dtype)
-                tied = finite_idx[np.abs(total_scores[finite_idx] - min_t) <= atol]
-                if len(tied) > 1:
-                    n_sm_t = n_sm[tied]
-                    min_n = int(np.min(n_sm_t))
-                    still = tied[n_sm_t == min_n]
-                    best = int(still[np.argmin(raw_scores[still])])
-                else:
-                    best = int(tied[0])
+                tied_mask = total_scores <= min_t + atol
+                min_n = int(n_sm[tied_mask].min())
+                cand = tied_mask & (n_sm == min_n)
+                best = int(np.where(cand, raw_scores, np.inf).argmin())
                 raw_array[k] = raw_scores[best]
                 total_array[k] = total_scores[best]
                 ns_array[k] = n_sm[best]
-                backptr_array[0, k] = i_vals[best]
-                backptr_array[1, k] = j_vals[best]
+                backptr_array[0, k] = min_i + best
+                backptr_array[1, k] = k - 1 - (min_i + best)
                 continue
 
             if prefer_fewer:
-                # Lexicographic: minimise outlier count, then raw cost
-                n_sm_f = n_sm[finite_idx]
-                min_n = int(np.min(n_sm_f))
-                candidates = finite_idx[n_sm_f == min_n]
-                best = int(candidates[np.argmin(raw_scores[candidates])])
+                # Lexicographic: minimise outlier count, then raw cost.
+                # inf-cost states must not win on outlier count alone.
+                feasible = np.isfinite(raw_scores)
+                if not feasible.any():
+                    continue
+                min_n = int(n_sm[feasible].min())
+                cand = feasible & (n_sm == min_n)
+                best = int(np.where(cand, raw_scores, np.inf).argmin())
             else:
-                # Minimise raw cost, break ties by fewer outliers
-                raw_f = raw_scores[finite_idx]
-                min_raw = float(np.min(raw_f))
+                # Minimise raw cost, break ties by fewer outliers.
+                min_raw = float(raw_scores.min())
+                if not np.isfinite(min_raw):
+                    continue
                 atol = tie_atol(min_raw, dtype)
-                tied = finite_idx[np.abs(raw_f - min_raw) <= atol]
-                if len(tied) > 1:
-                    n_sm_t = n_sm[tied]
-                    min_n = int(np.min(n_sm_t))
-                    still_tied = tied[n_sm_t == min_n]
-                    if len(still_tied) > 1 and node is tree.root:
+                tied_mask = raw_scores <= min_raw + atol
+                n_tied = int(np.count_nonzero(tied_mask))
+                if n_tied > 1:
+                    min_n = int(n_sm[tied_mask].min())
+                    cand = tied_mask & (n_sm == min_n)
+                    n_still = int(np.count_nonzero(cand))
+                    if n_still > 1 and node is tree.root:
                         pc._root_ties[k + 1] = {
-                            "n_solutions": int(len(still_tied)),
+                            "n_solutions": n_still,
                             "total_score": float(min_raw),
-                            "outlier_count": int(min_n),
+                            "outlier_count": min_n,
                         }
-                    best = int(still_tied[0])
+                    best = int(cand.argmax())
                 else:
-                    best = int(tied[0])
+                    best = int(tied_mask.argmax())
 
             raw_array[k] = raw_scores[best]
             total_array[k] = raw_scores[best]
             ns_array[k] = n_sm[best]
 
-            backptr_array[0, k] = i_vals[best]
-            backptr_array[1, k] = j_vals[best]
+            backptr_array[0, k] = min_i + best
+            backptr_array[1, k] = k - 1 - (min_i + best)
 
         pc.raw_dp_table[node_id] = raw_array
         pc.dp_table[node_id] = total_array
@@ -433,9 +416,6 @@ def _assign_group(
     """Assign all terminals under each node in group_nodes to cluster_id. Returns the next cluster_id."""
     name_leaves = getattr(pc, "name_leaves_per_node", None) if pc is not None else None
     for group_node in group_nodes:
-        # Prefer the pre-cached terminal list (dict lookup) over Biopython's
-        # on-the-fly DFS; both are equivalent but the cached path is ~100x
-        # faster per call and ``backtrack`` is hot.
         terms = name_leaves.get(group_node) if name_leaves is not None else None
         if terms is None:
             terms = group_node.get_terminals()
@@ -619,10 +599,7 @@ def backtrack(pc, k: int, *, verbose: bool = False) -> dict[Any, int]:
             print(f"Visiting node {getattr(node, 'name', '')} with c_index={c_index}")
 
         if c_index == 0:
-            # All leaves in this clade form one cluster. Use the pre-cached
-            # terminal list instead of calling ``node.get_terminals()`` — the
-            # latter is a full DFS via Biopython and dominates backtrack time
-            # on large trees.
+            # All leaves in this clade form one cluster.
             cached_terms = pc.name_leaves_per_node.get(node)
             if cached_terms is None:
                 cached_terms = node.get_terminals()

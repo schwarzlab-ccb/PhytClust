@@ -6,6 +6,8 @@ from typing import Any, Optional, List
 import numpy as np
 from Bio.Phylo.BaseTree import Tree, Clade
 
+from ..utils.traversal import iter_clades
+
 
 # Colless index (binary only)
 def colless_index_calc(tree: Tree) -> int:
@@ -13,11 +15,10 @@ def colless_index_calc(tree: Tree) -> int:
     Colless index for *binary* trees: sum over internal nodes of
     |#leaves(left) - #leaves(right)|.
     """
-    # O(n): count leaves under each node in a single postorder pass instead of
-    # calling get_terminals() (a full subtree re-walk) at every internal node.
+    # O(n) postorder count; get_terminals() per node would re-walk subtrees.
     leaf_count: dict[Any, int] = {}
     colless_sum = 0
-    for node in tree.find_clades(order="postorder"):
+    for node in iter_clades(tree.root, "postorder"):
         if node.is_terminal():
             leaf_count[node] = 1
             continue
@@ -199,6 +200,42 @@ def colless_ratio(tree: Tree) -> float:
     return normalized_colless(tree)
 
 
+def _cluster_mrca_ids(tree: Any, cluster_terms: dict[int, list[Clade]]) -> set[int]:
+    """ids of every cluster's MRCA, from one postorder pass.
+
+    Bio.Phylo's ``common_ancestor`` re-walks the tree per call (get_path ->
+    check_in_path), which costs ~O(N^2) once per cluster and dominated the
+    whole run. Counting each cluster's leaves bottom-up finds the same nodes:
+    postorder reaches the deepest node holding all of a cluster's leaves first,
+    and that node is by definition its MRCA. Children are merged small-into-
+    large, so the pass is O(N log N).
+    """
+    totals = {cid: len(terms) for cid, terms in cluster_terms.items()}
+    leaf_cid = {id(t): cid for cid, terms in cluster_terms.items() for t in terms}
+
+    found: dict[int, Clade] = {}
+    counts: dict[int, dict[int, int]] = {}
+
+    for node in iter_clades(tree.root, "postorder"):
+        if not node.clades:
+            cid = leaf_cid.get(id(node))
+            sub: dict[int, int] = {} if cid is None else {cid: 1}
+        else:
+            sub = {}
+            for child in node.clades:
+                child_sub = counts.pop(id(child), {})
+                if len(child_sub) > len(sub):
+                    sub, child_sub = child_sub, sub
+                for cid, n in child_sub.items():
+                    sub[cid] = sub.get(cid, 0) + n
+        counts[id(node)] = sub
+        for cid, n in sub.items():
+            if n == totals[cid] and cid not in found:
+                found[cid] = node
+
+    return {id(node) for node in found.values()}
+
+
 def cluster_alpha(tree: Any, cmap: dict[Clade, int]) -> dict[str, Any]:
     """
     Alpha = mean extra-cluster branch length / mean intra-cluster branch length.
@@ -213,15 +250,8 @@ def cluster_alpha(tree: Any, cmap: dict[Clade, int]) -> dict[str, Any]:
         cluster_terms[cid].append(term)
 
     # A node is "intra" iff it is a strict descendant of some cluster's MRCA.
-    # Collect the MRCA of each cluster, then classify every node in a single
-    # pre-order walk that propagates "an ancestor is an MRCA" downward. This
-    # replaces one full-subtree walk per cluster (mrca.find_clades) plus a
-    # second whole-tree pass, without changing the result.
-    mrca_ids: set[int] = set()
-    for terms in cluster_terms.values():
-        mrca = terms[0] if len(terms) == 1 else tree.common_ancestor(terms)
-        if mrca is not None:
-            mrca_ids.add(id(mrca))
+    # One pre-order walk propagating "an ancestor is an MRCA" downward.
+    mrca_ids = _cluster_mrca_ids(tree, cluster_terms)
 
     intra_sum = 0.0
     intra_count = 0
