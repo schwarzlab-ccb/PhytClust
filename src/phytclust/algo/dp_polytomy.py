@@ -149,9 +149,7 @@ def compute_polytomy_dp_hard(
             if min_i > max_i:
                 continue
 
-            # Fast path: no outlier handling. Mirrors the binary-node fast
-            # path in dp.py — fused add + argmin, ~4-6x faster per
-            # iteration than the previous Python loop.
+            # Mirrors the binary-node fast path in dp.py.
             if not use_outlier:
                 left_slice = prefix_raw[min_i:max_i + 1]
                 right_slice = child_raw[k - 1 - max_i:k - min_i][::-1]

@@ -146,7 +146,7 @@ def compute_coassoc_for_k(
         from concurrent.futures import ProcessPoolExecutor
 
         max_workers = None if n_jobs in (-1, None) else int(n_jobs)
-        # Pass Newick strings rather than live tree objects: lighter to pickle
+        # Newick strings pickle more cheaply than live tree objects.
         # and free of any Bio.Phylo cross-reference pickling quirks.
         payloads = [
             (_tree_to_newick(tree), k, outgroup, min_cluster_size, pc_kwargs, taxa)

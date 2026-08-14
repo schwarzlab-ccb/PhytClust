@@ -37,6 +37,20 @@ First stable release, accompanying the PhytClust manuscript.
 - Invalid or missing `--config` files now raise an error instead of silently
   using defaults.
 - Faster Colless index, representative-distance, and cluster/outgroup setup.
+- Cluster MRCAs are now found in a single postorder pass rather than one
+  `Bio.Phylo` `common_ancestor` call per cluster, which re-walked the tree each
+  time. This dominated total runtime on trees of any size — roughly 7x faster
+  end to end at 600 leaves and 14x at 1200. Results are unchanged.
+- Unfiltered tree walks use a plain traversal instead of `Bio.Phylo`'s
+  `find_clades`, which runs its attribute matcher on every node even when no
+  filter is given. Same nodes, same order; about 1.15x faster end to end.
+- The DP cache fingerprint hashes topology, names and branch lengths directly
+  instead of serialising the whole tree to a Newick string on every check.
+- The outlier-aware DP inner loop now pairs children with contiguous slices
+  instead of building index arrays and gathering through them once per *k*,
+  matching what the no-outlier branch already did. Since `size_threshold`
+  defaults to `2`, this is the branch nearly every run takes; it is roughly
+  2-3x faster. Selected *k*, cluster assignments and DP costs are unchanged.
 
 #### Changes that alter output
 
@@ -87,6 +101,11 @@ These change results for code that is otherwise unmodified.
 
 - GUI: fixed a backslash-triggered infinite loop (denial of service) and a
   path-traversal file write.
+- GUI: `/api/save` confines its `results_dir` to the server's working
+  directory. The output *filename* was already guarded, but the directory was
+  taken from the request unchecked, so a caller could create and write to any
+  path the server user could reach. Restart the GUI in the target directory to
+  write elsewhere.
 
 ## [0.1.2] – 2026-05-02
 

@@ -11,11 +11,8 @@ import numpy as np
 import matplotlib.colors as mcolors
 from matplotlib.colors import ListedColormap
 
-# Base colors for cluster fills. Same brand tones, led by red as before, but
-# ordered so that consecutive entries are always perceptually far apart (every
-# adjacent pair is >=~50 Lab units): with few clusters, neighbouring clusters
-# never get near-identical colours. This fixes the original order's collisions
-# (e.g. steel blue directly followed by indigo, olive next to teal).
+# Ordered so adjacent entries stay >=~50 Lab units apart: with few clusters,
+# neighbours never come out near-identical.
 BASE_HEX: list[str] = [
     "#b84b4b",  # red
     "#4f8f4a",  # green

@@ -36,21 +36,17 @@ def _find_zero_length_split_k(pc, max_k: int, eps: float = 1e-12) -> Optional[in
        per-k backtrack cache on ``pc.clusters`` and cooperates with the
        cache invalidation in ``_ensure_dp``.
     """
-    # 1. Short-circuit: if splits are structurally forbidden, there's nothing
-    #    to find. This alone turns an O(max_k) loop into O(1) for configs
-    #    where the user already opted into `no_split_zero_length=True`.
+    # Splits are structurally forbidden, so there is nothing to find.
     if getattr(pc, "no_split_zero_length", False):
         return None
 
-    # 2. Collect zero-length sibling pairs (clades with a zero-length branch
-    #    whose subtree contains exactly two terminals).
+    # Zero-length branches whose subtree holds exactly two terminals.
     active_tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
     zero_length_pairs: list[tuple] = []
     for node in active_tree.get_nonterminals():
         for child in node.clades:
             bl = child.branch_length or 0.0
             if bl <= eps:
-                # Prefer the pre-cached terminal list over a fresh DFS.
                 cached = getattr(pc, "name_leaves_per_node", None)
                 terms = cached.get(child) if cached is not None else None
                 if terms is None:
@@ -61,12 +57,8 @@ def _find_zero_length_split_k(pc, max_k: int, eps: float = 1e-12) -> Optional[in
     if not zero_length_pairs:
         return None
 
-    # 3. Walk k in order, using the cached backtrack. Early-exit on the first
-    #    split — in practice this terminates at very small k (often k=2).
-    #    Cap the search at `zero_length_split_max_k` (default 100). The peak
-    #    detector's warning is most actionable at small k; scanning into the
-    #    thousands provides little extra information and dominates runtime
-    #    on large trees with many feasible k values.
+    # Early-exit on the first split; capped because the warning is only
+    # actionable at small k and scanning further dominates runtime.
     search_cap = int(getattr(pc, "zero_length_split_max_k", 100))
     effective_max_k = min(max_k, search_cap)
     try:
@@ -198,13 +190,9 @@ def _vectorised_dp_row_scores(pc) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     betas[:n_in] = dp_row[:n_in]
 
     ks = np.arange(1, max_k + 1, dtype=float)
-    # Note: this is a Calinski-Harabasz-style variance ratio, but we normalise
-    # by (n - k)/k rather than the textbook CH (n - k)/(k - 1). This is
-    # intentional: PhytClust uses this term as a resolution weight for peak
-    # ranking (not as a strict CH statistic), and /k keeps it finite and
-    # well-behaved at k=1 where (k-1) would divide by zero. Changing it to
-    # /(k-1) would shift peak selection, so keep the two forms consistent if
-    # you ever revisit this (see `_single_cluster_score`).
+    # (n-k)/k, not textbook CH's (n-k)/(k-1): a resolution weight for ranking,
+    # finite at k=1. Changing it shifts peak selection — keep in step with
+    # _single_cluster_score.
     norm_ratios = (num_terminals - ks) / ks
 
     edge = ~np.isfinite(betas) | (betas == 0)
@@ -522,9 +510,7 @@ def find_score_peaks(
     from scipy.signal import find_peaks
 
     cfg = peak_config or PeakConfig()
-    # Re-check: config-file and CLI overlays mutate an already-built instance,
-    # so __post_init__ alone would not have seen those values.
-    cfg.validate()
+    cfg.validate()  # overlays mutate an already-built instance
 
     # Unpack config
     min_k = cfg.min_k

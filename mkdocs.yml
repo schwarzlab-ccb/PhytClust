@@ -24,8 +24,6 @@ theme:
     - search.highlight
 
 markdown_extensions:
-  - admonition
-  - pymdownx.details
   - tables
   - toc:
       permalink: true

@@ -140,10 +140,28 @@ pc = PhytClust(
     polytomy_mode="hard",          # "hard" | "soft"
     soft_polytomy_max_degree=12,
     no_split_zero_length=False,
+    dp_float32=False,              # halve DP memory on very large trees
     runtime_config=None,           # RuntimeConfig; defaults applied if None
     peak_config=None,              # PeakConfig; defaults applied if None
 )
 ```
+
+### Large trees
+
+The DP accumulates in float64. On trees large enough that the DP frontier is
+the binding memory constraint, `dp_float32=True` halves that footprint.
+
+It costs score precision, and not uniformly: the score forms
+`(β(1) − β(k)) / β(k)`, a difference of large near-equal sums, so float32's
+shorter mantissa is most damaging at large *k* on trees with a large total
+dispersion — exactly the trees you would enable it for. Selected *k* can shift.
+Reach for it when the DP will not otherwise fit in memory, not as a general
+speed-up, and check that the peaks it returns match a float64 run on a subtree
+where that is affordable.
+
+Two other knobs matter at scale: `max_k` (or `max_k_limit`) bounds the DP
+directly, and `preserve_dp_tables=False` (the default) frees each child's table
+as soon as its parent is computed.
 
 Outlier settings go through `OutlierConfig(size_threshold=3, prefer_fewer=True)`.
 

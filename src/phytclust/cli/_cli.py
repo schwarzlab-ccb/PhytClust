@@ -128,11 +128,10 @@ def _load_config(path: pathlib.Path | None) -> dict:
 
 
 def _warn_deprecated_key(old: str, new: str) -> None:
-    """Announce a renamed config key on both channels.
+    """Warn on a renamed config key.
 
-    ``DeprecationWarning`` is what programmatic callers and tests can catch;
-    Python hides it from end users by default, so the log line is what actually
-    reaches someone running the CLI.
+    Python hides DeprecationWarning by default, so the log line is what
+    actually reaches a CLI user.
     """
     message = f"config key '{old}' is deprecated, use '{new}' instead."
     warnings.warn(message, DeprecationWarning, stacklevel=3)
@@ -221,8 +220,7 @@ def _peak_config_from_cfg(
         if val is not None and hasattr(peak_cfg, key):
             setattr(peak_cfg, key, val)
 
-    # Overlays bypass __post_init__, so re-check here — this reports a bad
-    # config value before the DP runs rather than partway through it.
+    # Overlays bypass __post_init__; fail before the DP rather than during it.
     peak_cfg.validate()
     return peak_cfg
 
