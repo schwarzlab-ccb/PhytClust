@@ -36,10 +36,8 @@ class ScorePlotConfig:
 class ClusterPlotConfig:
     """Cluster/tree rendering defaults.
 
-    These are the single source of truth for cluster-plot defaults: both the CLI
-    and ``plot_clusters`` resolve unset options from here, so a
-    ``RuntimeConfig`` set on the ``PhytClust`` object applies to ``pc.plot()``
-    as well. Explicitly passed keyword arguments always win.
+    The CLI and ``plot_clusters`` both resolve unset options from here.
+    Explicit keyword arguments win.
     """
 
     cmap: str = "phytclust"

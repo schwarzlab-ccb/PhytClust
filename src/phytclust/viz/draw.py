@@ -841,8 +841,7 @@ def plot_cluster(
     outlier: bool = False,
     hide_internal_nodes: bool = True,
     show_terminal_labels: bool = False,  # passed to plot_tree (currently not used inside)
-    # Kept in step with ClusterPlotConfig, which is the source of truth for
-    # cluster-plot defaults. plot_clusters always passes these explicitly.
+    # Kept in step with ClusterPlotConfig.
     width_scale: float = 2.0,
     height_scale: float = 0.1,
     label_func: Callable[[Any], str] | None = None,

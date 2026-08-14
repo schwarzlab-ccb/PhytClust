@@ -83,8 +83,7 @@ def plot_clusters(
     show_branch_axis: bool = True,
     **kwargs,
 ) -> None:
-    # Unset options fall back to the object's ClusterPlotConfig, mirroring how
-    # viz.scores resolves ScorePlotConfig. Explicit arguments always win.
+    # Unset options fall back to ClusterPlotConfig; explicit arguments win.
     cluster_cfg = getattr(getattr(pc, "plot_config", None), "cluster", None)
 
     def _cfg(value, field, fallback):
