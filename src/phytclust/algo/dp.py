@@ -19,7 +19,6 @@ from .dp_utils import (
     penalty_active,
     subtree_all_zero,
     dtype_eps,
-    tie_atol,
     validate_args as _validate_args,
 )
 from ..validation import (
