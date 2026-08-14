@@ -1,7 +1,6 @@
 import os
 import logging
 import warnings
-import numpy as np
 from typing import Any, Optional, Callable, Tuple, List
 import matplotlib.pyplot as plt
 
@@ -65,17 +64,17 @@ def plot_clusters(
     top_n: int = 1,
     n: Optional[int] = None,
     k: Optional[int] = None,
-    cmap="phytclust",
+    cmap=None,
     show_terminal_labels: bool = False,
     outlier: bool = False,
     save: bool = False,
     filename: Optional[str] = None,
-    hide_internal_nodes: bool = True,
-    width_scale: float = 2,
-    height_scale: float = 0.1,
+    hide_internal_nodes: Optional[bool] = None,
+    width_scale: Optional[float] = None,
+    height_scale: Optional[float] = None,
     label_func: Optional[Callable[[Any], Tuple[float, str]]] = None,
-    show_branch_lengths: bool = False,
-    marker_size: int = 40,
+    show_branch_lengths: Optional[bool] = None,
+    marker_size: Optional[int] = None,
     show_cluster_bars: bool = False,
     show_cluster_boxes: bool = False,
     colour_branches_by_cluster: bool = False,
@@ -84,6 +83,22 @@ def plot_clusters(
     show_branch_axis: bool = True,
     **kwargs,
 ) -> None:
+    # Unset options fall back to the object's ClusterPlotConfig, mirroring how
+    # viz.scores resolves ScorePlotConfig. Explicit arguments always win.
+    cluster_cfg = getattr(getattr(pc, "plot_config", None), "cluster", None)
+
+    def _cfg(value, field, fallback):
+        if value is not None:
+            return value
+        return getattr(cluster_cfg, field, fallback)
+
+    cmap = _cfg(cmap, "cmap", "phytclust")
+    hide_internal_nodes = _cfg(hide_internal_nodes, "hide_internal_nodes", True)
+    width_scale = _cfg(width_scale, "width_scale", 2.0)
+    height_scale = _cfg(height_scale, "height_scale", 0.1)
+    show_branch_lengths = _cfg(show_branch_lengths, "show_branch_lengths", False)
+    marker_size = _cfg(marker_size, "marker_size", 40)
+
     if pc.clusters is None:
         pc.clusters = {}
 

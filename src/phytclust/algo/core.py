@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from math import ceil
 from typing import Any, Optional
 
-import numpy as np
 from pathlib import Path
 from io import StringIO
 
@@ -194,6 +193,25 @@ class PhytClust:
         self._last_result: Optional[dict[str, Any]] = None
 
         prepare_tree(self)
+
+    def __repr__(self) -> str:
+        # Concise, informative summary instead of the dataclass default (which
+        # would dump the whole Bio.Phylo tree object and every config field).
+        # Also serves as __str__ (str/print fall back to __repr__).
+        parts = [f"terminals={getattr(self, 'num_terminals', 0)}"]
+        if self.outgroup:
+            parts.append(f"outgroup={self.outgroup!r}")
+        max_k = getattr(self, "max_k", None)
+        if max_k is not None:
+            parts.append(f"max_k={max_k}")
+        peaks = getattr(self, "peaks_by_rank", None)
+        if peaks:
+            parts.append(f"peaks={list(peaks)}")
+        elif self.k is not None:
+            parts.append(f"k={self.k}")
+        if not getattr(self, "_dp_ready", False):
+            parts.append("dp=uncomputed")
+        return f"PhytClust({', '.join(parts)})"
 
     def _hash_tree(self) -> int:
         """Tree fingerprint, used to detect modifications."""
@@ -587,7 +605,7 @@ class PhytClust:
         All modes accept ``peak_config`` for tuning peak detection::
 
             from phytclust.config import PeakConfig
-            pc.run(top_n=3, peak_config=PeakConfig(lambda_weight=0.5))
+            pc.run(top_n=3, peak_config=PeakConfig(prominence_weight=0.5))
 
         Returns
         -------

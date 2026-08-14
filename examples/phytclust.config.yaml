@@ -3,7 +3,7 @@ runtime:
   plot:
     cluster:
       width_scale: 2.5
-      # Lower value = shorter figure (increase if labels overlap)
+      # Lower value = shorter figure
       height_scale: 0.30
       # Node marker size
       marker_size: 40
@@ -17,7 +17,7 @@ runtime:
       prefer_unsmoothed_primary: true
       # Keep only one score plot by default
       show_secondary_score_plot: false
-      # Clamp negatives to zero on y-axis (set false to allow symlog negatives)
+      # Clamp negatives to zero on y-axis 
       clamp_negative_to_zero: true
       fig_width: 18
       fig_height: 10
@@ -30,16 +30,19 @@ runtime:
       peak_labelsize: 50
 
   save:
-    csv_name: "phytclust_results.csv"
-    # Mark singletons as -1 in CSV (treat as outliers)
+    # Output is always tab-separated; use a .tsv extension to match.
+    tsv_name: "phytclust_results.tsv"
+    # Mark singletons as -1 in the table (treat as outliers)
     outlier: true
 
 # Algorithm tuning (optional)
 algorithm:
   peak:
-    # weight assigned prominence vs absolute score when ranking peaks
-    lambda_weight: 0.7
-    # "raw" only takes absolute value into account, "adjusted" also considers prominence
+    # Ranking blend, 0-1: 1 = prominence only, 0 = absolute score only.
+    # Only used when ranking_mode is "adjusted".
+    prominence_weight: 0.7
+    # "raw" ranks by absolute prominence alone; "adjusted" normalises
+    # prominence and score, then blends them by prominence_weight
     ranking_mode: "adjusted"
     min_k: 2
     # For resolution bins with no detected peaks: "none" or "max_score"

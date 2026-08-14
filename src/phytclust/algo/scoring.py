@@ -10,7 +10,7 @@ from ..exceptions import (
 )
 from ..viz.scores import plot_scores as _plot_scores
 from .bins import define_bins as _define_bins
-from ..config import PeakConfig
+from ..config import RANKING_MODES, PeakConfig
 
 logger = logging.getLogger("phytclust")
 
@@ -358,11 +358,11 @@ def calculate_scores(pc, plot: bool = False) -> None:
 def _rank_peaks(
     peak_data: list,
     ranking_mode: str,
-    lambda_weight: float,
+    prominence_weight: float,
 ) -> list:
     """Rank peaks by prominence and score; returns list of dicts sorted best-first."""
-    if ranking_mode not in ("raw", "adjusted"):
-        raise ConfigurationError("ranking_mode must be either 'raw' or 'adjusted'.")
+    if ranking_mode not in RANKING_MODES:
+        raise ConfigurationError(f"ranking_mode must be one of {RANKING_MODES}.")
 
     all_prom = [x[1] for x in peak_data]
     all_sc = [x[2] for x in peak_data]
@@ -387,7 +387,10 @@ def _rank_peaks(
                 if score_max > score_min
                 else 1.0
             )
-            base_metric = lambda_weight * prom_norm + (1 - lambda_weight) * score_norm
+            base_metric = (
+                prominence_weight * prom_norm
+                + (1 - prominence_weight) * score_norm
+            )
             combined_metric = base_metric
 
         ranked_data.append(
@@ -519,6 +522,9 @@ def find_score_peaks(
     from scipy.signal import find_peaks
 
     cfg = peak_config or PeakConfig()
+    # Re-check: config-file and CLI overlays mutate an already-built instance,
+    # so __post_init__ alone would not have seen those values.
+    cfg.validate()
 
     # Unpack config
     min_k = cfg.min_k
@@ -529,7 +535,7 @@ def find_score_peaks(
     min_relative_prominence = getattr(cfg, "min_relative_prominence", None)
     prominence_k_power = getattr(cfg, "prominence_k_power", 0.0)
     ranking_mode = cfg.ranking_mode
-    lambda_weight = cfg.lambda_weight
+    prominence_weight = cfg.prominence_weight
     boundary_window_size = cfg.boundary_window_size
     boundary_ratio_threshold = cfg.boundary_ratio_threshold
     resolution_fallback_mode = cfg.resolution_fallback_mode
@@ -742,7 +748,7 @@ def find_score_peaks(
         pc.resolution_info = None
         pc.peaks_by_resolution = None
 
-        ranked_data = _rank_peaks(peak_data, ranking_mode, lambda_weight)
+        ranked_data = _rank_peaks(peak_data, ranking_mode, prominence_weight)
 
         chosen = ranked_data[:global_peaks]
         final_peaks = [int(x["k"]) for x in chosen]
@@ -755,7 +761,7 @@ def find_score_peaks(
         pc.resolution_info = {}
         pc.peaks_by_resolution = {}
 
-        ranked_data = _rank_peaks(peak_data, ranking_mode, lambda_weight)
+        ranked_data = _rank_peaks(peak_data, ranking_mode, prominence_weight)
         pc.peak_ranking_details = ranked_data
 
         all_picked_peaks = []
@@ -777,7 +783,6 @@ def find_score_peaks(
                     bin_best_k = int(bin_ks[best_idx])
                     bin_best_score = float(bin_vals[best_idx])
 
-            used_fallback = False
             if len(chosen) == 0 and resolution_fallback_mode == "max_score":
                 if bin_best_k is not None and bin_best_score is not None:
                     chosen = [
@@ -789,7 +794,6 @@ def find_score_peaks(
                             "selection_note": "fallback_max_score",
                         }
                     ]
-                    used_fallback = True
 
             chosen_kvals = [x["k"] for x in chosen]
             pc.resolution_info[bin_label] = chosen

@@ -1,8 +1,8 @@
 site_name: PhytClust
-site_description: Tree-aware clustering for rooted phylogenies
-site_url: https://iccb-cologne.github.io/PhytClust/
-repo_name: ICCB-Cologne/PhytClust
-repo_url: https://github.com/ICCB-Cologne/PhytClust
+site_description: Efficient and Optimal Monophyletic Partitioning of Rooted Phylogenetic Trees
+site_url: https://schwarzlab-ccb.github.io/PhytClust/
+repo_name: schwarzlab-ccb/PhytClust
+repo_url: https://github.com/schwarzlab-ccb/PhytClust
 
 theme:
   name: material
@@ -46,7 +46,4 @@ nav:
   - Tutorials:
       - CLI End-to-End: tutorials/cli-end-to-end.md
       - Python End-to-End: tutorials/python-end-to-end.md
-  - Reference:
-      - CLI Flags: reference/cli.md
-      - Configuration: reference/configuration.md
-      - Python API: reference/api.md
+  - Reference: reference/index.md

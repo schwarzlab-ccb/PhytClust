@@ -5,7 +5,6 @@ import string
 from collections import deque
 from typing import Any, Optional, Tuple
 
-from Bio import Phylo
 from Bio.Phylo.BaseTree import Clade, Tree
 
 from .exceptions import InvalidTreeError

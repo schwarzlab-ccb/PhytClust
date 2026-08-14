@@ -1,16 +1,3 @@
-"""
-Regression tests for PhytClust's internal caches.
-
-These lock in the behavior introduced when the DP cache invalidation was
-extended to cover all DP-affecting parameters, and when scores / backtrack
-caches were made to persist across repeated ``run()`` calls.
-
-Strategy: monkeypatch the three expensive entry points used by ``run()`` —
-``compute_dp_table``, ``calculate_scores``, and ``backtrack`` — with counting
-wrappers that still delegate to the real implementations. Then assert on the
-call counts after specific sequences of ``run()`` calls.
-"""
-
 import pathlib
 
 import pytest

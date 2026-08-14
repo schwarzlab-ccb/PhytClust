@@ -45,7 +45,7 @@ const PARAM_FIELDS = [
   { path: "params.outlier.ratio_mode", id: "extra-outlier-ratio-mode", type: "select" },
 
   // peak
-  { path: "params.peak.lambda_weight", id: "extra-lambda", type: "float" },
+  { path: "params.peak.prominence_weight", id: "extra-prominence-weight", type: "float" },
   { path: "params.peak.ranking_mode", id: "extra-ranking-mode", type: "select" },
   { path: "params.peak.min_prominence", id: "extra-min-prominence", type: "float" },
   { path: "params.peak.relative_prominence", id: "extra-relative-prom", type: "checkbox" },

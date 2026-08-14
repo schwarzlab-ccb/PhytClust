@@ -1,5 +1,5 @@
 from .outlier import OutlierConfig
-from .peak import PeakConfig
+from .peak import RANKING_MODES, RESOLUTION_FALLBACK_MODES, PeakConfig
 from .runtime import (
     RuntimeConfig,
     PlotConfig,
@@ -12,6 +12,8 @@ from .runtime import (
 __all__ = [
     "OutlierConfig",
     "PeakConfig",
+    "RANKING_MODES",
+    "RESOLUTION_FALLBACK_MODES",
     "RuntimeConfig",
     "PlotConfig",
     "ScorePlotConfig",

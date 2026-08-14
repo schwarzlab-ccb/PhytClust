@@ -61,7 +61,7 @@ export async function runPhytClust() {
   var binsVal = readIntParam("extra-bins");
   var maxKVal = readIntParam("extra-maxk");
   var maxKLimitVal = readFloatParam("extra-maxklimit");
-  var lambdaVal = readFloatParam("extra-lambda");
+  var promWeightVal = readFloatParam("extra-prominence-weight");
   var minClusterVal = readIntParam("extra-min-cluster-size");
 
   if (outgroupVal && !isOutgroupInNewick(newickText, outgroupVal)) {
@@ -85,7 +85,7 @@ export async function runPhytClust() {
   if (binsVal !== null) payload.num_bins = binsVal;
   if (maxKVal !== null) payload.max_k = maxKVal;
   if (maxKLimitVal !== null) payload.max_k_limit = maxKLimitVal;
-  if (lambdaVal !== null) payload.lambda_weight = lambdaVal;
+  if (promWeightVal !== null) payload.prominence_weight = promWeightVal;
   if (minClusterVal !== null) payload.min_cluster_size = minClusterVal;
   if (mode === "resolution") payload.by_resolution = true;
 

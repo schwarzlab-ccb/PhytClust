@@ -43,9 +43,6 @@ Thumbs.db
 # Local results
 results/
 
-# Temporary analysis
-clonetrac/
-
 # MkDocs build output
 site/
 

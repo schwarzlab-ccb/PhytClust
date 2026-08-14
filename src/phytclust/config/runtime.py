@@ -34,11 +34,17 @@ class ScorePlotConfig:
 
 @dataclass
 class ClusterPlotConfig:
-    """Cluster/tree rendering defaults."""
+    """Cluster/tree rendering defaults.
+
+    These are the single source of truth for cluster-plot defaults: both the CLI
+    and ``plot_clusters`` resolve unset options from here, so a
+    ``RuntimeConfig`` set on the ``PhytClust`` object applies to ``pc.plot()``
+    as well. Explicitly passed keyword arguments always win.
+    """
 
     cmap: str = "phytclust"
-    width_scale: float = 2.5
-    height_scale: float = 0.30
+    width_scale: float = 2.0
+    height_scale: float = 0.1
     marker_size: int = 40
     show_branch_lengths: bool = False
     hide_internal_nodes: bool = True
@@ -46,9 +52,13 @@ class ClusterPlotConfig:
 
 @dataclass
 class SaveConfig:
-    """Output defaults used by save methods / CLI."""
+    """Output defaults used by save methods / CLI.
 
-    csv_name: str = "phytclust_results.tsv"
+    The results table is always tab-separated, so the field is ``tsv_name``
+    and the matching CLI flag is ``--tsv-name``.
+    """
+
+    tsv_name: str = "phytclust_results.tsv"
     outlier: bool = True
 
 

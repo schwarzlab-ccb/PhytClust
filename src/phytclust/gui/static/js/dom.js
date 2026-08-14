@@ -17,7 +17,7 @@ export const extraResolutionEl = document.getElementById("extra-resolution");
 export const extraBinsEl = document.getElementById("extra-bins");
 export const extraMaxKEl = document.getElementById("extra-maxk");
 export const extraMaxKLimitEl = document.getElementById("extra-maxklimit");
-export const extraLambdaEl = document.getElementById("extra-lambda");
+export const extraPromWeightEl = document.getElementById("extra-prominence-weight");
 export const extraMinClusterEl = document.getElementById("extra-min-cluster-size");
 export const extraOutlierEl = document.getElementById("extra-outlier");
 

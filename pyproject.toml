@@ -68,9 +68,9 @@ gui = [
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5,<10"]
 
 [project.urls]
-Documentation = "https://iccb-cologne.github.io/PhytClust/"
-Source = "https://github.com/ICCB-Cologne/PhytClust"
-Tracker = "https://github.com/ICCB-Cologne/PhytClust/issues"
+Documentation = "https://schwarzlab-ccb.github.io/PhytClust/"
+Source = "https://github.com/schwarzlab-ccb/PhytClust"
+Tracker = "https://github.com/schwarzlab-ccb/PhytClust/issues"
 
 [project.scripts]
 phytclust = "phytclust.cli:main"

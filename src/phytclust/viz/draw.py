@@ -29,6 +29,7 @@ COLORS = {
     "marker_terminal": "black",
     "marker_normal": "green",
     "summary_label": "grey",
+    "branch_label": mpl.colors.to_rgba("dimgray"),
     "background": "white",
     "background_hatch": "lightgray",
     "patch_background": "white",
@@ -43,6 +44,7 @@ SIZES = {
     "xlabel_font": 10,
     "xlabel_tick": 8,
     "chr_label": 8,
+    "branch_label": 6,
 }
 
 
@@ -146,6 +148,10 @@ def plot_tree(
     texts: list[str] = []
     text_colors: list[Any] = []
 
+    branch_text_x: list[float] = []
+    branch_text_y: list[float] = []
+    branch_texts: list[str] = []
+
     if ax is None:
         nsamp = len(list(input_tree.find_clades()))
         plot_height = max(1.5, height_scale * nsamp * 0.25)
@@ -167,7 +173,8 @@ def plot_tree(
             if outgroup is not None and name == outgroup:
                 clade_colors[name] = COLORS["marker_normal"]
 
-        get_label_color = lambda label: clade_colors.get(label, "black")
+        def get_label_color(label):
+            return clade_colors.get(label, "black")
     else:
         get_label_color = (
             label_colors
@@ -175,11 +182,12 @@ def plot_tree(
             else (lambda label: label_colors.get(label, "black"))
         )
 
-    marker_func = lambda node: (
-        (marker_size, get_label_color(getattr(node, "name", "")))
-        if getattr(node, "name", None)
-        else None
-    )
+    def marker_func(node):
+        return (
+            (marker_size, get_label_color(getattr(node, "name", "")))
+            if getattr(node, "name", None)
+            else None
+        )
 
     # setup axes
     ax.axes.get_yaxis().set_visible(False)
@@ -283,6 +291,15 @@ def plot_tree(
                 lw=lw,
             )
 
+            # Branch label at the midpoint of the parent→clade edge. The formatter
+            # returns None when neither show_branch_lengths nor branch_labels is
+            # set, so this draws nothing in the default case.
+            blabel = format_branch_label(clade)
+            if blabel:
+                branch_text_x.append((x_start + x_here) / 2.0)
+                branch_text_y.append(y_here)
+                branch_texts.append(str(blabel))
+
             if marker_func is not None and not (
                 hide_internal_nodes and not clade.is_terminal()
             ):
@@ -349,6 +366,19 @@ def plot_tree(
 
     for x, y, text, color in zip(text_x, text_y, texts, text_colors):
         ax.text(x, y, text, va="center", color=color)
+
+    # Branch labels sit centered just above their edge (va="bottom" lifts them
+    # off the line even with the inverted y-axis).
+    for x, y, text in zip(branch_text_x, branch_text_y, branch_texts):
+        ax.text(
+            x,
+            y,
+            text,
+            ha="center",
+            va="bottom",
+            fontsize=SIZES["branch_label"],
+            color=COLORS["branch_label"],
+        )
 
     if not is_cladogram and show_branch_axis:
         ax.set_xlabel("branch length")
@@ -811,11 +841,13 @@ def plot_cluster(
     outlier: bool = False,
     hide_internal_nodes: bool = True,
     show_terminal_labels: bool = False,  # passed to plot_tree (currently not used inside)
+    # Kept in step with ClusterPlotConfig, which is the source of truth for
+    # cluster-plot defaults. plot_clusters always passes these explicitly.
     width_scale: float = 2.0,
-    height_scale: float = 0.4,
+    height_scale: float = 0.1,
     label_func: Callable[[Any], str] | None = None,
     show_branch_lengths: bool = False,
-    marker_size: int = 50,
+    marker_size: int = 40,
     outgroup: str | None = None,
     scores: list[float] | np.ndarray | None = None,
     show_cluster_bars: bool = False,

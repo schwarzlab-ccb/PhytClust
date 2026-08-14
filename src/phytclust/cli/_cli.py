@@ -7,6 +7,7 @@ import sys
 import textwrap
 import logging
 import time
+import warnings
 from typing import Any
 
 from Bio import Phylo
@@ -126,6 +127,18 @@ def _load_config(path: pathlib.Path | None) -> dict:
     return data
 
 
+def _warn_deprecated_key(old: str, new: str) -> None:
+    """Announce a renamed config key on both channels.
+
+    ``DeprecationWarning`` is what programmatic callers and tests can catch;
+    Python hides it from end users by default, so the log line is what actually
+    reaches someone running the CLI.
+    """
+    message = f"config key '{old}' is deprecated, use '{new}' instead."
+    warnings.warn(message, DeprecationWarning, stacklevel=3)
+    LOG.warning("config: %s", message)
+
+
 def _runtime_overrides_from_cfg(raw_cfg: dict[str, Any]) -> dict[str, Any]:
     """Map user config file keys to RuntimeConfig overrides."""
     out: dict[str, Any] = {}
@@ -150,8 +163,13 @@ def _runtime_overrides_from_cfg(raw_cfg: dict[str, Any]) -> dict[str, Any]:
         out.setdefault("plot", {})["scores"] = dict(scores_block)
 
     if save_block:
+        tsv_name = save_block.get("tsv_name")
+        if tsv_name is None and save_block.get("csv_name") is not None:
+            # Renamed: the output was always tab-separated.
+            _warn_deprecated_key("save.csv_name", "save.tsv_name")
+            tsv_name = save_block.get("csv_name")
         save_map = {
-            "csv_name": save_block.get("csv_name"),
+            "tsv_name": tsv_name,
             "outlier": save_block.get("outlier"),
         }
         save_map = {k: v for k, v in save_map.items() if v is not None}
@@ -164,6 +182,10 @@ def _runtime_overrides_from_cfg(raw_cfg: dict[str, Any]) -> dict[str, Any]:
         out.update(runtime_block)
 
     return out
+
+
+#: Deprecated config-file keys under `peak`, mapped old -> new.
+_DEPRECATED_PEAK_KEYS = {"lambda_weight": "prominence_weight"}
 
 
 def _peak_config_from_cfg(
@@ -184,13 +206,24 @@ def _peak_config_from_cfg(
         peak_block = (raw_cfg.get("algorithm") or {}).get("peak")
     if isinstance(peak_block, dict):
         for key, val in peak_block.items():
+            if key in _DEPRECATED_PEAK_KEYS:
+                new_key = _DEPRECATED_PEAK_KEYS[key]
+                if new_key in peak_block:
+                    continue  # new key wins; no need to warn twice
+                _warn_deprecated_key(f"peak.{key}", f"peak.{new_key}")
+                key = new_key
             if hasattr(peak_cfg, key):
                 setattr(peak_cfg, key, val)
+            else:
+                LOG.warning("config: unknown key 'peak.%s' ignored.", key)
 
     for key, val in (cli_overrides or {}).items():
         if val is not None and hasattr(peak_cfg, key):
             setattr(peak_cfg, key, val)
 
+    # Overlays bypass __post_init__, so re-check here — this reports a bad
+    # config value before the DP runs rather than partway through it.
+    peak_cfg.validate()
     return peak_cfg
 
 
@@ -316,6 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
 
           # one peak per 4 log-bins, headless save
           phytclust data/tree.nwk --resolution --bins 4 --no-plot --save-all-k --save-fig
+
+          # launch the web GUI (see `phytclust gui --help`)
+          phytclust gui --port 8000
         """
     )
 
@@ -426,11 +462,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--lambda-weight",
+        "--prominence-weight",
+        "--lambda-weight",  # deprecated alias, scheduled for removal in 2.0.0
         type=float,
-        dest="lambda_weight",
+        dest="prominence_weight",
         default=None,
-        help="Peak prominence parameter for score peak selection "
+        metavar="W",
+        help="How peaks are ranked: 1.0 = purely by prominence (how much a "
+             "peak stands out from its neighbours), 0.0 = purely by absolute "
+             "score. Only used when peak.ranking_mode is 'adjusted' (the "
+             "default); ignored for 'raw'. "
              "(default: 0.7, from config file or PeakConfig if unset).",
     )
     p.add_argument(
@@ -497,8 +538,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # `phytclust gui [...]` launches the web GUI. Intercepted before the main
+    # (tree-clustering) parser, whose required positional `tree` would otherwise
+    # reject the subcommand.
+    if argv and argv[0] == "gui":
+        from ..gui.launch import main as gui_main
+
+        return gui_main(argv[1:])
+
     args = build_parser().parse_args(argv)
     _configure_logging(args.verbose, args.quiet, args.no_color, args.log_format)
+
+    # argparse accepts the deprecated alias silently, so flag it here.
+    if any(a == "--lambda-weight" or a.startswith("--lambda-weight=") for a in argv):
+        warnings.warn(
+            "--lambda-weight is deprecated, use --prominence-weight instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        LOG.warning(
+            "--lambda-weight is deprecated, use --prominence-weight instead."
+        )
 
     show_phase_ui = bool(console is not None and sys.stderr.isatty())
 
@@ -530,7 +593,7 @@ def main(argv=None) -> int:
         "hide_internal_nodes": runtime_cfg.plot.cluster.hide_internal_nodes,
     }
 
-    save_default_filename = runtime_cfg.save.csv_name
+    save_default_filename = runtime_cfg.save.tsv_name
     save_default_outlier = runtime_cfg.save.outlier
 
     t0_total = time.perf_counter()
@@ -582,12 +645,12 @@ def main(argv=None) -> int:
                 args.max_k or "auto",
             )
 
-            # Explicit CLI flags win over config/defaults. lambda_weight
+            # Explicit CLI flags win over config/defaults. prominence_weight
             # defaults to None (unset); exclude_k2 is only reachable as False
             # via --include-k2, so treat False as an explicit override.
             cli_peak_overrides: dict[str, Any] = {}
-            if args.lambda_weight is not None:
-                cli_peak_overrides["lambda_weight"] = args.lambda_weight
+            if args.prominence_weight is not None:
+                cli_peak_overrides["prominence_weight"] = args.prominence_weight
             if not args.exclude_k2:
                 cli_peak_overrides["exclude_k2"] = False
             peak_cfg = _peak_config_from_cfg(cfg, cli_peak_overrides)

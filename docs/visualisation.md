@@ -1,14 +1,25 @@
 # Visualisation
 
-PhytClust ships a static plotting layer alongside the algorithm. It's matplotlib-based, produces PNG/SVG/PDF, and is the right tool when you want figures for a paper, a notebook, or a batch pipeline. (For interactive exploration, the [web GUI](getting-started.md#web-gui-experimental) is the better fit.)
+PhytClust has a few plotting features alongside the algorithm. It is
+matplotlib-based, writes PNG, SVG, and PDFs. For interactive
+exploration and customized trees, use the [web GUI](getting-started.md#web-gui-experimental).
 
-All examples on this page were generated from the bundled [`examples/sample_tree.nwk`](https://github.com/ICCB-Cologne/PhytClust/blob/master/examples/sample_tree.nwk) at *k* = 3, using `plot_clusters(pc, k=3, ...)`. Run any of these in your own session — every option below is a keyword argument to `plot_clusters` (or directly to `plot_cluster`).
+Every example here was generated from the bundled
+[`examples/sample_tree.nwk`](https://github.com/schwarzlab-ccb/PhytClust/blob/master/examples/sample_tree.nwk)
+at *k* = 3 via `plot_clusters(pc, k=3, ...)`. All options below are keyword
+arguments to `plot_clusters`, or to `plot_cluster` directly.
+
+This page is the reference for the plotting options. `pc.plot()` in the
+[Python API reference](reference/index.md#python-api) is the convenience
+wrapper; the `phytclust.viz` functions — `plot_clusters`, `plot_cluster` and
+`plot_multiple_k` — take the full keyword set, and it is documented here. The
+reference lists their signatures and links back to this page.
 
 ---
 
-## The defaults
+## Defaults
 
-The simplest call colours each leaf marker by cluster. Useful as a baseline; with bars or boxes you can take it further.
+The simplest call colours each leaf marker by cluster.
 
 ```python
 from phytclust import PhytClust
@@ -21,9 +32,17 @@ plot_clusters(pc, k=3, save=True, results_dir="figures")
 
 ![Baseline cluster plot](img/01_baseline.png)
 
+`k` here need not be one of the *k* values the run selected. `plot_clusters`
+backtracks the requested *k* out of the DP table, so any *k* from 1 up to `max_k`
+can be plotted once a run has populated it — `pc.run()` above uses global mode
+with `top_n=1` and probably did not pick *k* = 3, which is fine. Asking for a *k*
+beyond `max_k`, or before any run, raises.
+
 ## Side bars
 
-A column of coloured rectangles to the right of the leaf labels. Each bar spans the y-range of one cluster, and consecutive same-cluster leaves merge into a single rectangle. When bars are on, the leaf markers themselves go neutral — the bars carry the cluster information so colouring leaves on top would be redundant.
+A column of coloured rectangles sits to the right of the leaf labels. Each bar
+spans the y-range of one cluster, and consecutive same-cluster leaves merge into
+a single rectangle.
 
 ```python
 plot_clusters(pc, k=3, show_cluster_bars=True, ...)
@@ -33,9 +52,11 @@ plot_clusters(pc, k=3, show_cluster_bars=True, ...)
 
 ## MRCA boxes
 
-A translucent rectangle per cluster, rooted at the cluster's MRCA and extending to the right edge of its leaves. The cluster ID label sits to the right of each box. Outlier clusters (cluster ID < 0) get a dashed open box for visual distinction.
+One translucent rectangle per cluster, rooted at the cluster's MRCA and extending
+to the right edge of its leaves, with the cluster ID label to the right of the
+box. Outlier clusters are drawn as a dashed open box.
 
-This is the static analogue of the GUI's **Boxes (MRCA)** colour mode.
+This is the static counterpart of the GUI's **Boxes (MRCA)** colour mode.
 
 ```python
 plot_clusters(pc, k=3, show_cluster_boxes=True, ...)
@@ -45,7 +66,9 @@ plot_clusters(pc, k=3, show_cluster_boxes=True, ...)
 
 ## Branches coloured by cluster
 
-Every edge inside a cluster's subtree — including the vertical "spine" lines connecting children — picks up the cluster colour. Mixed-cluster edges and the backbone of the tree stay grey, so cluster boundaries read at a glance.
+Every edge inside a cluster's subtree, including the vertical spine lines
+connecting children, takes the cluster colour. Mixed-cluster edges and the tree
+backbone stay grey, so cluster boundaries are readable at a glance.
 
 ```python
 plot_clusters(pc, k=3, colour_branches_by_cluster=True, ...)
@@ -55,7 +78,11 @@ plot_clusters(pc, k=3, colour_branches_by_cluster=True, ...)
 
 ## Cladogram layout
 
-`layout="cladogram"` ignores branch lengths and places every leaf at the same depth so the tree's right edge is flush. Useful for trees where the topology matters more than the absolute branch-length scale, or where rate variation makes the phylogram hard to read. The branch-length axis is automatically hidden in this mode (it carries no biological meaning).
+`layout="cladogram"` ignores branch lengths and places every leaf at the same
+depth, flushing the tree's right edge. This suits trees where topology matters
+more than the branch-length scale, or where rate variation makes the phylogram
+hard to read. The branch-length axis is hidden automatically in this mode, since
+it carries no meaning.
 
 ```python
 plot_clusters(pc, k=3, layout="cladogram", show_cluster_bars=True, ...)
@@ -63,9 +90,10 @@ plot_clusters(pc, k=3, layout="cladogram", show_cluster_bars=True, ...)
 
 ![Cladogram with side bars](img/05_cladogram.png)
 
-## Combinations: a publication-style plot
+## Combining options
 
-Most options compose. A common combination for a manuscript figure: cladogram layout, branches coloured by cluster, MRCA boxes for emphasis.
+Most options compose. A common manuscript combination is cladogram layout,
+branches coloured by cluster, and MRCA boxes:
 
 ```python
 plot_clusters(
@@ -82,7 +110,8 @@ plot_clusters(
 
 ## Custom palettes
 
-Pass a `palette` of hex strings or RGB(A) tuples — it overrides the default palette. The list will be cycled if you have more clusters than colours.
+`palette` takes hex strings or RGB(A) tuples and overrides the default palette.
+The list cycles if there are more clusters than colours.
 
 ```python
 plot_clusters(
@@ -101,21 +130,39 @@ plot_clusters(
 
 ---
 
-## All options at a glance
+## All options
 
-| Argument | Default | What it does |
+| Argument | Default | Effect |
 |---|---|---|
-| `k` / `top_n` | `top_n=1` | Either an explicit cluster count, or use the top-N peaks |
-| `show_cluster_bars` | `False` | Side bars to the right of leaves |
+| `k` / `top_n` | `top_n=1` | An explicit cluster count, or the top-N peaks |
+| `show_cluster_bars` | `False` | Side bars to the right of the leaves |
 | `show_cluster_boxes` | `False` | MRCA-rooted translucent rectangles |
 | `colour_branches_by_cluster` | `False` | Tint edges inside each cluster subtree |
 | `layout` | `"rectangular"` | `"rectangular"` (phylogram) or `"cladogram"` |
 | `palette` | `None` | List of hex / RGB / RGBA colours |
-| `cmap` | `"phytclust"` | Matplotlib colormap name (used when `palette` is `None`) |
-| `show_branch_axis` | `True` | Draw the bottom branch-length axis (auto-hidden for cladograms) |
+| `cmap` | `"phytclust"` | Matplotlib colormap, used when `palette` is `None` |
+| `show_branch_axis` | `True` | Draw the branch-length axis; auto-hidden for cladograms |
 | `width_scale` / `height_scale` | `2.0` / `0.1` | Per-leaf horizontal and vertical scaling |
 | `marker_size` | `40` | Leaf marker size in points² |
 | `hide_internal_nodes` | `True` | Suppress internal node markers and labels |
-| `save` / `filename` / `results_dir` | `False` | Write the figure to a PNG |
+| `save` | `False` | Write the figure to file; `filename` and `results_dir` set the path |
 
-For full kwargs see the [Python API reference](reference/api.md).
+### Where these defaults come from
+
+`ClusterPlotConfig` is the single source of truth. Any option left unset
+resolves from the `RuntimeConfig` on the `PhytClust` object, so the CLI,
+`pc.plot()` and `plot_clusters()` all agree:
+
+```python
+cfg = RuntimeConfig(plot=PlotConfig(cluster=ClusterPlotConfig(height_scale=0.8)))
+pc = PhytClust(tree, runtime_config=cfg)
+
+pc.plot(save=True)                     # height_scale=0.8, from the config
+pc.plot(save=True, height_scale=0.5)   # 0.5 — an explicit argument wins
+```
+
+Precedence is **explicit argument → `ClusterPlotConfig` → built-in default**.
+`ScorePlotConfig` resolves the same way for the score plot.
+
+Outlier clusters carry cluster ID **`-1`**, the same convention used in the
+output table and everywhere else in the docs.

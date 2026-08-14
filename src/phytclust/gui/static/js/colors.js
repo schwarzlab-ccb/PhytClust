@@ -5,23 +5,29 @@
 
 import { state } from "./state.js";
 
+// Cluster fill colors. Same brand tones, led by red, but ordered so consecutive
+// entries are always perceptually far apart (every adjacent pair >=~50 Lab
+// units): neighbouring clusters never get near-identical colours. Matches
+// viz/palette.py:BASE_HEX so in-app colours equal the saved matplotlib figures.
+// (This is the cluster palette only — the brand gradient strip lives in the
+// --pc-palette-* CSS variables in base.css and is intentionally a smooth sweep.)
 export const BASE_COLORS = [
-  "#b84b4b",
-  "#849060",
-  "#3d7c74",
-  "#6e3f8a",
-  "#ceb94b",
-  "#3f648a",
-  "#3f408a",
-  "#da63aa",
-  "#c06f2e",
-  "#2f6f93",
-  "#4f8f4a",
-  "#ad5c7a",
-  "#7a5d3b",
-  "#2f8a85",
-  "#8f4b7f",
-  "#5b6bb3",
+  "#b84b4b", // red
+  "#4f8f4a", // green
+  "#da63aa", // pink
+  "#ceb94b", // gold
+  "#3f408a", // indigo
+  "#c06f2e", // amber brown
+  "#5b6bb3", // slate blue
+  "#849060", // olive
+  "#6e3f8a", // purple
+  "#2f8a85", // cyan teal
+  "#8f4b7f", // magenta plum
+  "#3d7c74", // teal
+  "#ad5c7a", // rose
+  "#2f6f93", // ocean blue
+  "#7a5d3b", // earth
+  "#3f648a", // steel blue
 ];
 
 export function shuffle(arr) {

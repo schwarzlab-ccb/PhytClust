@@ -33,7 +33,7 @@ from phytclust import (
 
 # Build your peak-selection behavior
 peak_cfg = PeakConfig(
-    lambda_weight=0.5,
+    prominence_weight=0.5,
     min_prominence=5.0,
     resolution_fallback_mode="max_score",
 )
@@ -62,7 +62,7 @@ Use this pattern when you want reproducible runs from notebooks or scripts.
 from phytclust import PeakConfig
 
 peak_cfg = PeakConfig(
-    lambda_weight=0.7,
+    prominence_weight=0.7,
     ranking_mode="adjusted",
     min_prominence=None,
     min_k=2,
@@ -73,11 +73,11 @@ peak_cfg = PeakConfig(
 
 | Field                      | Default      | When to change it                                                              |
 | -------------------------- | ------------ | ------------------------------------------------------------------------------ |
-| `lambda_weight`            | `0.7`        | Lower toward `0` to favor raw score; raise toward `1` to favor adjusted score. |
-| `ranking_mode`             | `"adjusted"` | Use `"raw"` for pure score ranking without outlier/size correction.            |
+| `prominence_weight`            | `0.7`        | Lower toward `0` to rank peaks by score height; raise toward `1` to rank by prominence. |
+| `ranking_mode`             | `"adjusted"` | `"adjusted"` normalises then blends the two signals; `"raw"` ranks by absolute prominence alone. |
 | `min_prominence`           | `None`       | Increase to suppress minor local peaks.                                        |
 | `min_k`                    | `2`          | Increase if you want to ignore very small k values.                            |
-| `resolution_fallback_mode` | `"none"`     | Set to `"max_score"` so each resolution bin always returns a k.                |
+| `resolution_fallback_mode` | `"none"`     | One of `"none"` \| `"max_score"`. Set to `"max_score"` so each resolution bin always returns a k. |
 
 ### Boundary Controls for k=2
 
@@ -133,7 +133,7 @@ runtime_cfg = RuntimeConfig(
 
 | Field      | Default                   | Meaning                                        |
 | ---------- | ------------------------- | ---------------------------------------------- |
-| `csv_name` | `"phytclust_results.csv"` | Default output filename.                       |
+| `tsv_name` | `"phytclust_results.tsv"` | Default output filename (output is tab-separated). |
 | `outlier`  | `True`                    | Mark outlier clusters as `-1` in saved output. |
 
 ---
@@ -145,7 +145,7 @@ You can define equivalent settings in a config file and pass it via `--config`.
 ```yaml
 # phytclust.config.yaml
 peak:
-  lambda_weight: 0.5
+  prominence_weight: 0.5
   min_prominence: 5.0
   resolution_fallback_mode: max_score
 
@@ -158,7 +158,7 @@ plot:
     cmap: tab10
 
 save:
-  csv_name: results.tsv
+  tsv_name: results.tsv
 ```
 
 ```bash
@@ -178,7 +178,7 @@ Use when you want fewer, stronger peaks.
 ```yaml
 peak:
   ranking_mode: adjusted
-  lambda_weight: 0.8
+  prominence_weight: 0.8
   min_prominence: 10.0
   min_k: 3
 ```
@@ -190,7 +190,7 @@ Use when exploring noisy trees.
 ```yaml
 peak:
   ranking_mode: raw
-  lambda_weight: 0.2
+  prominence_weight: 0.2
   min_prominence: 1.0
   min_k: 2
   resolution_fallback_mode: max_score
@@ -237,13 +237,14 @@ Use this section when you need exact field names and defaults.
 
 | Field                      | Type            | Default      | Description                                                                                        |
 | -------------------------- | --------------- | ------------ | -------------------------------------------------------------------------------------------------- |
-| `lambda_weight`            | `float`         | `0.7`        | Blend between raw and adjusted score (`0` raw only, `1` adjusted only).                            |
-| `ranking_mode`             | `str`           | `"adjusted"` | `"raw"` uses raw composite score; `"adjusted"` applies outlier-ratio and cluster-size corrections. |
+| `prominence_weight`            | `float`         | `0.7`        | Blend of the two ranking signals, `0`–`1`: `1` = peak prominence only, `0` = absolute score only. Ignored when `ranking_mode="raw"`. |
+| `ranking_mode`             | `str`           | `"adjusted"` | One of `"raw"` \| `"adjusted"`. `"adjusted"` min–max normalises prominence and score across peaks, then blends by `prominence_weight`; `"raw"` ranks by absolute prominence alone. |
 | `boundary_window_size`     | `int`           | `5`          | Right-window size for evaluating the `k=2` boundary candidate.                                     |
 | `boundary_ratio_threshold` | `float`         | `1.5`        | Minimum score ratio vs right-window median for `k=2` to pass.                                      |
 | `min_prominence`           | `float \| None` | `None`       | Minimum prominence for `scipy.signal.find_peaks`; `None` auto-sets to 1% of score range.           |
 | `min_k`                    | `int`           | `2`          | Peaks below this k are ignored.                                                                    |
-| `resolution_fallback_mode` | `str`           | `"none"`     | `"none"` leaves empty bins; `"max_score"` picks max-score k in that bin.                           |
+| `resolution_fallback_mode` | `str`           | `"none"`     | One of `"none"` \| `"max_score"`. Resolution mode only: `"none"` leaves a peak-less bin empty; `"max_score"` picks the max-score k in that bin. Any other value raises `ConfigurationError`. |
+| `exclude_k2`               | `bool`          | `True`       | Drop `k=2` (the trivial root-level split) from automatic peak selection. Set `False` to allow it. Exact `k=2` requests are always honoured. |
 
 ### ScorePlotConfig
 
@@ -279,5 +280,5 @@ Use this section when you need exact field names and defaults.
 
 | Field      | Type   | Default                   | Description                                    |
 | ---------- | ------ | ------------------------- | ---------------------------------------------- |
-| `csv_name` | `str`  | `"phytclust_results.csv"` | Default output filename.                       |
+| `tsv_name` | `str`  | `"phytclust_results.tsv"` | Default output filename (output is tab-separated). |
 | `outlier`  | `bool` | `True`                    | Annotate outlier clusters with `-1` in output. |

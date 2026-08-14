@@ -82,6 +82,7 @@ def _normalize_newick(newick: str) -> str:
 
     return "".join(result)
 
+
 # Set PHYTCLUST_PUBLIC_MODE=1 to enable public-safe restrictions:
 #   - leaf count capped at PUBLIC_MAX_TIPS
 #   - /api/save disabled (arbitrary server-path writes)
@@ -176,7 +177,7 @@ class PhytclustRequest(BaseModel):
     optimize_polytomies: bool = True
 
     # Peak config
-    lambda_weight: float = 0.7
+    prominence_weight: float = 0.7
     ranking_mode: str = "adjusted"
     min_prominence: Optional[float] = None
     use_relative_prominence: bool = False
@@ -336,7 +337,7 @@ def _run_phytclust(req: PhytclustRequest):
 
     try:
         # Build peak config
-        peak_kwargs: dict[str, Any] = {"lambda_weight": req.lambda_weight}
+        peak_kwargs: dict[str, Any] = {"prominence_weight": req.prominence_weight}
         if req.ranking_mode:
             peak_kwargs["ranking_mode"] = req.ranking_mode
         if req.min_prominence is not None:

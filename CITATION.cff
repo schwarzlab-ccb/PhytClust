@@ -9,11 +9,11 @@ authors:
   - family-names: "Schwarz"
     given-names: "Roland F"
     email: "roland.schwarz@iccb-cologne.org"
-repository-code: "https://github.com/ICCB-Cologne/PhytClust"
-url: "https://github.com/ICCB-Cologne/PhytClust"
+repository-code: "https://github.com/schwarzlab-ccb/PhytClust"
+url: "https://github.com/schwarzlab-ccb/PhytClust"
 license: "GPL-3.0-only"
-version: "0.1.1"
-date-released: "2026-03-04"
+version: "1.0.0"
+date-released: "2026-08-12"
 keywords:
   - phylogenetics
   - clustering

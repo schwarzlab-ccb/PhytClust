@@ -40,7 +40,7 @@ export function resetExtraParams() {
     "extra-bins",
     "extra-maxk",
     "extra-maxklimit",
-    "extra-lambda",
+    "extra-prominence-weight",
     "extra-min-cluster-size",
     "extra-min-prominence",
     "extra-outlier-threshold",
