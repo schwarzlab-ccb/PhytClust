@@ -37,7 +37,6 @@ def root_tree_at_taxon(tree: Tree, root_taxon: Optional[str]) -> Tree:
         tree.root_at_midpoint()
         return tree
 
-    # Root at specified taxon
     if not is_outgroup_valid(tree, root_taxon):
         raise InvalidTreeError(f"Root taxon '{root_taxon}' not found in the tree.")
     tree.root_with_outgroup(tree.find_clades(name=root_taxon).__next__())
@@ -65,10 +64,7 @@ def validate_and_set_outgroup(
 
 
 def _terminal_maps(tree: Tree) -> Tuple[dict[Any, list[Any]], dict[Any, int]]:
-    """Build {node -> [terminal clades]} and {node -> #terminals} in one O(n) pass.
-
-    Extends children's terminal lists bottom-up rather than calling
-    ``node.get_terminals()`` per node (which re-walks each subtree, O(n·depth)).
+    """Build {node -> [terminal clades]} and {node -> #terminals}
     """
     node_terminals: dict[Any, list[Any]] = {}
     terminal_count: dict[Any, int] = {}
@@ -89,7 +85,7 @@ def prune_outgroup(
     tree: Tree, outgroup: Optional[str]
 ) -> Tuple[dict[Any, list[Any]], dict[Any, int]]:
     """
-    Return mappings after pruning the outgroup from a COPY of the tree.
+    Return mappings after pruning the outgroup from a copy of the tree.
     If the outgroup is at root with two children, we keep the sibling as the new root.
     Otherwise we simply prune the outgroup clade.
     """
@@ -102,8 +98,6 @@ def prune_outgroup(
             f"Outgroup '{outgroup}' not found during prune_outgroup()."
         )
 
-    # If outgroup is a direct child of root and root is bifurcating,
-    # set sibling as new root - else, prune normally.
     if tree.root and len(tree.root.clades) == 2 and outgroup_clade in tree.root.clades:
         sibling = (
             tree.root.clades[0]
@@ -124,9 +118,8 @@ def is_outgroup_valid(tree: Tree, outgroup: str) -> bool:
 
 def validate_tree(tree: Tree, outgroup: Optional[str] = None) -> None:
     """
-    Collapse single-child chains and log polytomous nodes (handled natively by DP).
+    Collapse single-child chains and log polytomous nodes
     """
-    # collapse single-child chains first
     merge_single_child_clades(tree)
 
     polytomy_nodes = []
@@ -139,7 +132,7 @@ def validate_tree(tree: Tree, outgroup: Optional[str] = None) -> None:
 
     if polytomy_nodes:
         logger.info(
-            "Polytomous nodes (handled natively by DP convolution): "
+            "Polytomous nodes: "
             + ", ".join(
                 f"{node.name or '?'} (children={len(node.clades)})"
                 for node in polytomy_nodes
@@ -183,8 +176,7 @@ def rename_nodes(tree: Tree, outgroup: Optional[str] = None) -> None:
                 new_name = f"{base}_{suffix}"
             logger.warning(
                 "Node name '%s' is duplicated; renaming to '%s'. "
-                "Output rows will reference the renamed label — this usually "
-                "signals duplicate taxa in the input.",
+                "Output rows will reference the renamed label.",
                 base,
                 new_name,
             )
@@ -209,35 +201,16 @@ def merge_single_child_clades(tree: Tree) -> None:
             clade.clades = child.clades
         queue.extend(clade.clades)
 
-
-def resolve_polytomies(tree: Tree) -> Tree:
-    """
-    Break nodes with >2 children by inserting 0-length dummy internal nodes until binary.
-    """
-    to_visit: deque[Clade] = deque([tree.root])
-    while to_visit:
-        node = to_visit.popleft()
-        while len(node.clades) > 2:
-            new_clade = Clade(
-                branch_length=0.0, clades=[node.clades.pop(0), node.clades.pop(0)]
-            )
-            new_clade.comment = "DUMMY_NODE"
-            node.clades.append(new_clade)
-            to_visit.append(new_clade)
-        to_visit.extend(node.clades)
-    return tree
-
-
 def ensure_branch_lengths(tree: Tree) -> None:
     """
-    Normalize branch lengths and warn on degenerate inputs.
+    Set branch lengths:
 
-    - If *no* branch has a positive length (all None/0), set every non-root
-      branch to 1.0 (unweighted tree).
-    - If lengths are *mixed* (some present, some missing/zero), leave them as-is
-      but warn loudly: the missing branches are treated as length 0.0 by the DP,
-      which can yield zero within-cluster dispersion and undefined (inf) alpha.
-    - Warn on any negative branch length (geometrically meaningless).
+    - If no branch has a positive length (all None/0), set every non-root
+      branch to 1.0 (unweighted tree)
+    - If lengths are mixed (some present, some missing/zero), leave them as-is
+      but the missing branches are treated as length 0.0 by the DP,
+      which may yield zero within-cluster dispersion and undefined (inf) alpha.
+    - Warn on any negative branch length
     """
     clades = [cl for cl in iter_clades(tree.root) if cl is not tree.root]
 
@@ -246,8 +219,8 @@ def ensure_branch_lengths(tree: Tree) -> None:
 
     if n_negative:
         logger.warning(
-            "%d of %d branches have a negative length; distances and the "
-            "clustering objective are only meaningful for non-negative branches.",
+            "%d of %d branches have a negative length "
+            "clustering objective may not be meaningful",
             n_negative,
             len(clades),
         )
