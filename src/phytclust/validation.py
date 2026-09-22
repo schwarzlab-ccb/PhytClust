@@ -58,7 +58,7 @@ def validate_and_set_outgroup(
 
     if outgroup and not is_outgroup_valid(tree, outgroup):
         raise InvalidTreeError(f"Outgroup '{outgroup}' not found in the tree.")
-    validate_tree(tree, outgroup)
+    merge_single_child_clades(tree)
     rename_nodes(tree, outgroup)
     ensure_branch_lengths(tree)
     return tree, outgroup
@@ -98,17 +98,6 @@ def prune_outgroup(
 def is_outgroup_valid(tree: Tree, outgroup: str) -> bool:
     """True if any clade in the tree has name == outgroup."""
     return next(tree.find_clades(name=outgroup), None) is not None
-
-
-def validate_tree(tree: Tree, outgroup: str | None = None) -> None:
-    """
-    Normalize tree topology before clustering.
-
-    Collapses chains of single-child clades. Polytomies are left alone; the
-    DP handles them, and the caller reports them. ``outgroup`` is accepted
-    for signature compatibility and is unused.
-    """
-    merge_single_child_clades(tree)
 
 
 def rename_nodes(tree: Tree, outgroup: str | None = None) -> None:
