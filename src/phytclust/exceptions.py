@@ -32,15 +32,14 @@ class InvalidKError(ConfigurationError):
 
 
 class InvalidTreeError(DataError):
-    """Raised when tree structure is invalid."""
+    """Raised when a tree or a requested node is invalid or unavailable."""
     pass
 
 
 class MissingDPTableError(ComputationError):
-    """Raised when DP table is not computed but required."""
+    """Raised when required dynamic programming state is missing or invalid."""
     pass
 
-
 class InvalidClusteringError(ComputationError):
-    """Raised when clustering cannot be performed."""
+    """Raised when a requested clustering or required result is unavailable."""
     pass

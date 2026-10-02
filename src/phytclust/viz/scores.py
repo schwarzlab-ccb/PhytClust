@@ -22,7 +22,7 @@ def plot_scores(
     x_axis_mode: Optional[str] = None,
     log_base: Optional[float] = None,
 ) -> plt.Figure:
-    """Split-out of `_plot_scores` with optional runtime-config defaults."""
+    """Draws score-vs-k curve; runtime config used here."""
     use_full_scores = scores_subset is None
     if scores_subset is None:
         scores_subset = pc.scores
@@ -190,7 +190,6 @@ def plot_scores(
 
     yscale = ax.get_yscale()
     if yscale == "log":
-        # Keep lower bound strictly positive for log axis.
         positive_vals = scores_slice[scores_slice > 0]
         if positive_vals.size == 0:
             ax.set_yscale("linear")
@@ -210,7 +209,6 @@ def plot_scores(
         upper = max(y_max + padding + label_headroom, lower + 1.0)
         ax.set_ylim(lower, upper)
 
-    # Add peak labels after limits are finalized to improve placement.
     if peak_points:
         fig.canvas.draw()
         label_fontsize = int(peak_labelsize)
@@ -228,7 +226,6 @@ def plot_scores(
                 near_group_rank += 1
             last_x_px = x_px
 
-            # Keep labels away from CL headers by flipping below when near top.
             if top_px - y_px < 55:
                 y_offset = -(10 + 10 * (near_group_rank % 3))
                 va = "top"
