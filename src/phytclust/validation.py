@@ -65,10 +65,14 @@ def validate_and_set_outgroup(
     root_taxon: str | None = None,
 ) -> tuple[Tree, str | None]:
     """
-    Optionally root the tree, validate presence of outgroup (if provided),
-    collapse unprotected single-child nodes, and normalize names/branch lengths.
-    The tree is modified in place. Requested node labels must be unique.
-    Returns (tree, outgroup).
+    Prepare the tree for clustering and return ``(tree, outgroup)``.
+
+    Check the outgroup name, normalize branch lengths, and root the tree
+    if requested. Collapse single-child nodes except the outgroup and its
+    parent, then give each node a unique name.
+
+    Modify the tree in place. Names requested for rooting or as the outgroup
+    must identify exactly one node.
     """
     if outgroup is not None:
         _named_clade(tree, outgroup)
@@ -89,6 +93,8 @@ def prune_outgroup(
     If the outgroup is at root with two children, we keep the sibling as the new root.
     Otherwise remove the outgroup subtree and collapse its parent if unary,
     preserving distances between remaining leaves.
+    When replacing a parent with its remaining child, keep the parent's
+    confidence and warn if a different child confidence is discarded.
     """
     if outgroup is None:
         return leaf_maps(tree.root)
@@ -104,6 +110,7 @@ def prune_outgroup(
             if tree.root.clades[1] is outgroup_clade
             else tree.root.clades[1]
         )
+        _retain_parent_confidence(tree.root, sibling)
         tree.root = sibling
     else:
         path = tree.get_path(outgroup_clade)
@@ -111,6 +118,7 @@ def prune_outgroup(
         parent.clades.remove(outgroup_clade)
         if len(parent.clades) == 1:
             child = parent.clades[0]
+            _retain_parent_confidence(parent, child)
             if parent is tree.root:
                 tree.root = child
             else:
@@ -130,10 +138,10 @@ def is_outgroup_valid(tree: Tree, outgroup: str) -> bool:
 
 def rename_nodes(tree: Tree, outgroup: str | None = None) -> None:
     """
-    Give unique names to all nodes
-    Keep the outgroup name as-is if unique
+    Give each node a unique name, preserving a unique outgroup name.
 
-    Unnamed nodes receive generated ``internal_node_*`` labels, Nodes carrying a name that another node also uses are suffixed ``_1``, ``_2``, ... with a warning.
+    Assign ``internal_node_*`` labels to unnamed nodes. Add numeric
+    suffixes to duplicate names and log a warning for each rename.
     """
     ordered = list(nonterminals(tree.root)) + list(terminals(tree.root))
 
@@ -181,12 +189,26 @@ def rename_nodes(tree: Tree, outgroup: str | None = None) -> None:
         node_names.add(node.name)
 
 
+def _retain_parent_confidence(parent: Clade, child: Clade) -> None:
+    """Copy the parent's confidence to the child, warning if support is lost."""
+    if child.confidence is not None and child.confidence != parent.confidence:
+        logger.warning(
+            "Collapsing single-child clade %r into parent %r: "
+            "retaining parent confidence %r; discarding child confidence %r.",
+            child.name,
+            parent.name,
+            parent.confidence,
+            child.confidence,
+        )
+    child.confidence = parent.confidence
+
+
 def merge_single_child_clades(tree: Tree, outgroup: str | None = None) -> None:
     """
     Collapse chains of single-child clades by summing branch lengths.
     Preserve nodes carrying the requested outgroup label and their parents.
-    The surviving node retains its original confidence and other metadata.
-    Warn when a different, non-missing child confidence is discarded.
+    Keep the parent's confidence and other metadata. Log a warning if the
+    child has a different confidence value that is not None.
     """
     queue: deque[Clade] = deque([tree.root])
     while queue:
@@ -195,15 +217,7 @@ def merge_single_child_clades(tree: Tree, outgroup: str | None = None) -> None:
             child = clade.clades[0]
             if outgroup is not None and outgroup in (clade.name, child.name):
                 break
-            if child.confidence is not None and child.confidence != clade.confidence:
-                logger.warning(
-                    "Collapsing single-child clade %r into parent %r: "
-                    "retaining parent confidence %r; discarding child confidence %r.",
-                    child.name,
-                    clade.name,
-                    clade.confidence,
-                    child.confidence,
-                )
+            _retain_parent_confidence(clade, child)
             clade.name = getattr(child, "name", clade.name)
             clade.branch_length = (clade.branch_length or 0.0) + (
                 child.branch_length or 0.0
@@ -216,17 +230,14 @@ def ensure_branch_lengths(tree: Tree) -> None:
     """
     Normalize branch lengths before clustering.
 
-    Non-numeric and non-finite lengths (including the root length) are rejected.
+    Reject non-numeric lengths, NaN, and infinity, including at the root.
 
-    - Negative lengths are clamped to 0.0 with a warning; a negative branch
-      has no meaning for the clustering objective, and 0.0 is the neutral
-      value the DP already handles.
-    - If no branch has a positive length (all None/0/negative), every
-      non-root branch is set to 1.0 (unweighted tree).
-    - If lengths are mixed (some present, some missing/zero/clamped), they
-      are left as-is, but the non-positive branches are treated as length
-      0.0 by the DP, which may yield zero within-cluster dispersion and
-      undefined (inf) alpha.
+    - Set negative non-root branch lengths to 0.0 and log a warning.
+    - If no non-root branch has a positive length, set all non-root branch
+      lengths to 1.0, treating the tree as unweighted.
+    - Otherwise, keep positive lengths and leave missing lengths as None.
+      Clustering treats missing and zero lengths as zero, which can produce
+      zero within-cluster dispersion and infinite alpha values.
     """
     nodes = list(iter_clades(tree.root))
     for node in nodes:
