@@ -71,8 +71,7 @@ def validate_and_set_outgroup(
     if requested. Collapse single-child nodes except the outgroup and its
     parent, then give each node a unique name.
 
-    Modify the tree in place. Names requested for rooting or as the outgroup
-    must identify exactly one node.
+    Modify the tree in place. Root and outgroup names must each match one node.
     """
     if outgroup is not None:
         _named_clade(tree, outgroup)
