@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import string
 from collections import deque
 from typing import Any
@@ -11,6 +12,16 @@ from .exceptions import InvalidTreeError
 from .utils.traversal import LeafSpans, iter_clades, leaf_maps, nonterminals, terminals
 
 logger = logging.getLogger(__name__)
+
+
+def _named_clade(tree: Tree, name: str) -> Clade:
+    """Resolve a literal, unique node label; reject missing or ambiguous labels."""
+    matches = [node for node in iter_clades(tree.root) if node.name == name]
+    if not matches:
+        raise InvalidTreeError(f"Node '{name}' not found in the tree.")
+    if len(matches) != 1:
+        raise InvalidTreeError(f"Node name '{name}' is ambiguous ({len(matches)} matches).")
+    return matches[0]
 
 
 def root_tree_at_taxon(tree: Tree, root_taxon: str | None) -> Tree:
@@ -34,12 +45,16 @@ def root_tree_at_taxon(tree: Tree, root_taxon: str | None) -> Tree:
         return tree
 
     if root_taxon == "midpoint":
+        if len(list(terminals(tree.root))) < 2:
+            raise InvalidTreeError("Midpoint rooting requires at least two leaves.")
+        ensure_branch_lengths(tree)
+        for node in iter_clades(tree.root):
+            if node.branch_length is None:
+                node.branch_length = 0.0
         tree.root_at_midpoint()
         return tree
 
-    root_clade = next(tree.find_clades(name=root_taxon), None)
-    if root_clade is None:
-        raise InvalidTreeError(f"Root taxon '{root_taxon}' not found in the tree.")
+    root_clade = _named_clade(tree, root_taxon)
     tree.root_with_outgroup(root_clade)
     return tree
 
@@ -51,16 +66,17 @@ def validate_and_set_outgroup(
 ) -> tuple[Tree, str | None]:
     """
     Optionally root the tree, validate presence of outgroup (if provided),
-    and normalize node names/branch lengths.
+    collapse unprotected single-child nodes, and normalize names/branch lengths.
+    The tree is modified in place. Requested node labels must be unique.
     Returns (tree, outgroup).
     """
+    if outgroup is not None:
+        _named_clade(tree, outgroup)
+    if root_taxon != "midpoint":
+        ensure_branch_lengths(tree)
     tree = root_tree_at_taxon(tree, root_taxon)
-
-    if outgroup and not is_outgroup_valid(tree, outgroup):
-        raise InvalidTreeError(f"Outgroup '{outgroup}' not found in the tree.")
-    merge_single_child_clades(tree)
+    merge_single_child_clades(tree, outgroup=outgroup)
     rename_nodes(tree, outgroup)
-    ensure_branch_lengths(tree)
     return tree, outgroup
 
 
@@ -71,16 +87,16 @@ def prune_outgroup(
     Remove the outgroup from ``tree`` and return the leaf maps that remain.
     Tree is modified in-place.
     If the outgroup is at root with two children, we keep the sibling as the new root.
-    Otherwise we simply prune the outgroup clade.
+    Otherwise remove the outgroup subtree and collapse its parent if unary,
+    preserving distances between remaining leaves.
     """
     if outgroup is None:
         return leaf_maps(tree.root)
 
-    outgroup_clade = next((cl for cl in tree.find_clades(name=outgroup)), None)
-    if outgroup_clade is None:
-        raise InvalidTreeError(
-            f"Outgroup '{outgroup}' not found during prune_outgroup()."
-        )
+    outgroup_clade = _named_clade(tree, outgroup)
+
+    if outgroup_clade is tree.root:
+        raise InvalidTreeError("The entire tree cannot be used as an outgroup.")
 
     if tree.root and len(tree.root.clades) == 2 and outgroup_clade in tree.root.clades:
         sibling = (
@@ -90,14 +106,26 @@ def prune_outgroup(
         )
         tree.root = sibling
     else:
-        tree.prune(outgroup_clade)
+        path = tree.get_path(outgroup_clade)
+        parent = tree.root if len(path) == 1 else path[-2]
+        parent.clades.remove(outgroup_clade)
+        if len(parent.clades) == 1:
+            child = parent.clades[0]
+            if parent is tree.root:
+                tree.root = child
+            else:
+                child.branch_length = (child.branch_length or 0.0) + (
+                    parent.branch_length or 0.0
+                )
+                grandparent = tree.root if len(path) == 2 else path[-3]
+                grandparent.clades[grandparent.clades.index(parent)] = child
 
     return leaf_maps(tree.root)
 
 
 def is_outgroup_valid(tree: Tree, outgroup: str) -> bool:
     """True if any clade in the tree has name == outgroup."""
-    return next(tree.find_clades(name=outgroup), None) is not None
+    return any(node.name == outgroup for node in iter_clades(tree.root))
 
 
 def rename_nodes(tree: Tree, outgroup: str | None = None) -> None:
@@ -153,15 +181,29 @@ def rename_nodes(tree: Tree, outgroup: str | None = None) -> None:
         node_names.add(node.name)
 
 
-def merge_single_child_clades(tree: Tree) -> None:
+def merge_single_child_clades(tree: Tree, outgroup: str | None = None) -> None:
     """
     Collapse chains of single-child clades by summing branch lengths.
+    Preserve nodes carrying the requested outgroup label and their parents.
+    The surviving node retains its original confidence and other metadata.
+    Warn when a different, non-missing child confidence is discarded.
     """
     queue: deque[Clade] = deque([tree.root])
     while queue:
         clade = queue.popleft()
         while len(clade.clades) == 1:
             child = clade.clades[0]
+            if outgroup is not None and outgroup in (clade.name, child.name):
+                break
+            if child.confidence is not None and child.confidence != clade.confidence:
+                logger.warning(
+                    "Collapsing single-child clade %r into parent %r: "
+                    "retaining parent confidence %r; discarding child confidence %r.",
+                    child.name,
+                    clade.name,
+                    clade.confidence,
+                    child.confidence,
+                )
             clade.name = getattr(child, "name", clade.name)
             clade.branch_length = (clade.branch_length or 0.0) + (
                 child.branch_length or 0.0
@@ -174,6 +216,8 @@ def ensure_branch_lengths(tree: Tree) -> None:
     """
     Normalize branch lengths before clustering.
 
+    Non-numeric and non-finite lengths (including the root length) are rejected.
+
     - Negative lengths are clamped to 0.0 with a warning; a negative branch
       has no meaning for the clustering objective, and 0.0 is the neutral
       value the DP already handles.
@@ -184,7 +228,18 @@ def ensure_branch_lengths(tree: Tree) -> None:
       0.0 by the DP, which may yield zero within-cluster dispersion and
       undefined (inf) alpha.
     """
-    clades = [cl for cl in iter_clades(tree.root) if cl is not tree.root]
+    nodes = list(iter_clades(tree.root))
+    for node in nodes:
+        if node.branch_length is not None:
+            try:
+                finite = math.isfinite(node.branch_length)
+            except (TypeError, ValueError, OverflowError):
+                finite = False
+            if not finite:
+                raise InvalidTreeError(
+                    f"Branch length for node {node.name!r} must be a finite number."
+                )
+    clades = [cl for cl in nodes if cl is not tree.root]
 
     n_missing = 0
     n_negative = 0
