@@ -585,7 +585,7 @@ def backtrack(clustering, k: int, *, verbose: bool = False) -> dict[Any, int]:
         )
 
     if getattr(clustering, "save_tied_optima", False):
-        from .ties import enumerate_tied_optima
+        from .tied_partitions import enumerate_tied_optima
 
         if not hasattr(clustering, "tied_optima") or clustering.tied_optima is None:
             clustering.tied_optima = {}

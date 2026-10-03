@@ -84,14 +84,15 @@ def _can_batch_merge(
 def _choose_balanced_split(
     mask, min_left_state: int, k: int, left_cluster_count_sum_of_squares=None
 ) -> int:
-    """Choose the most evenly distributed split among the candidate states.
+    """Choose the tied split with the smallest difference between child states.
 
     Use stored sums of squared cluster counts when merging a prefix of children.
     For equally balanced splits, choose the lower left state."""
     candidate_indices = np.flatnonzero(mask)
     left_states = min_left_state + candidate_indices
     if left_cluster_count_sum_of_squares is None:
-        key = np.abs(2 * left_states + 1 - k)
+        right_states = k - 1 - left_states
+        key = np.abs(left_states - right_states)
     else:
         key = left_cluster_count_sum_of_squares[left_states] + (k - left_states) ** 2
     return int(candidate_indices[key.argmin()])
@@ -193,9 +194,8 @@ def _merge_all_cluster_counts(
         else np.broadcast_to(row_indices, (shorter_state_count, column_count))
     )
     if left_cluster_count_sum_of_squares is None:
-        tie_key = np.abs(2 * left_state_indices + 1 - (column_indices + 1)).astype(
-            np.int64
-        )
+        right_state_indices = column_indices - left_state_indices
+        tie_key = np.abs(left_state_indices - right_state_indices).astype(np.int64)
     else:
         safe_left = np.clip(left_state_indices, 0, original_left_state_count - 1)
         tie_key = (
