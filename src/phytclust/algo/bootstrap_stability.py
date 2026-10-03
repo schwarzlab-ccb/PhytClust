@@ -1,103 +1,146 @@
-"""Bootstrap co-association stability analysis."""
+"""Measure how consistently taxon pairs group across bootstrap trees."""
 
-from io import StringIO
+import copy
+from numbers import Integral
 from typing import Any, Optional
 
 import numpy as np
-from Bio import Phylo
 from scipy import sparse
 
 from .core import PhytClust
-from ..exceptions import DataError
+from .dp.table import _copy_tree
+from ..exceptions import ConfigurationError, DataError, InvalidKError
+from ..utils.traversal import terminals
 
 
-def _taxon_order(trees):
-    """Sorted list of taxa present in *all* trees (intersection)."""
-    sets = [
-        {term.name for term in t.get_terminals()}
-        for t in trees
-    ]
-    common = set.intersection(*sets)
-    if not common:
+def _positive_integer(value, name, error=ConfigurationError):
+    if (
+        isinstance(value, (bool, np.bool_))
+        or not isinstance(value, Integral)
+        or value < 1
+    ):
+        raise error(f"{name} must be a positive integer.")
+
+
+def _common_taxon_names(trees):
+    """Return sorted leaf names present in every tree; require unique named leaves."""
+    if not trees:
+        raise DataError("No bootstrap trees supplied.")
+    taxon_sets = []
+    for replicate_index, tree in enumerate(trees):
+        names = [leaf.name for leaf in terminals(tree.root)]
+        if any(not isinstance(name, str) or not name for name in names):
+            raise DataError(f"Bootstrap tree {replicate_index} has unnamed leaves.")
+        if len(names) != len(set(names)):
+            raise DataError(
+                f"Bootstrap tree {replicate_index} has duplicate leaf names."
+            )
+        taxon_sets.append(set(names))
+    common_taxa = set.intersection(*taxon_sets)
+    if not common_taxa:
         raise DataError("No common taxa across bootstrap trees.")
-    return sorted(common)
+    return sorted(common_taxa)
 
 
-def _labels_from_cmap(cmap, taxa, missing_label: int = -1):
-    """Convert {leaf_obj -> cluster_id} into a label vector aligned with `taxa`."""
-    name_to_cluster = {leaf.name: cid for leaf, cid in cmap.items()}
-    labels = np.full(len(taxa), missing_label, dtype=int)
-    for i, name in enumerate(taxa):
-        if name in name_to_cluster:
-            labels[i] = name_to_cluster[name]
-    return labels
+def _cluster_labels_for_taxa(cluster_map, taxa):
+    """Return cluster IDs in taxon order, using -1 for unassigned taxa."""
+    name_to_cluster = {
+        leaf.name: cluster_id for leaf, cluster_id in cluster_map.items()
+    }
+    return np.array([name_to_cluster.get(name, -1) for name in taxa], dtype=int)
 
 
-def _coassoc_from_labels(labels: np.ndarray) -> np.ndarray:
-    """Compute co-association matrix from a (B, N) label array.
+def _pairwise_coassociation(labels):
+    """Return same-cluster frequencies for a replicate-by-taxon label matrix.
 
-    For each pair (i, j), the co-association is the fraction of bootstrap
-    replicates where both taxa were assigned to the same cluster (ignoring
-    replicates where either taxon has label < 0).
-
-    Vectorised: instead of looping over replicates and forming an N x N outer
-    product each time (O(B * N^2) Python-level), we build a single sparse
-    one-hot indicator ``M`` of shape (N, B * C) whose column ``b * C + c`` marks
-    the taxa placed in cluster ``c`` of replicate ``b``. Then ``M @ M.T`` is
-    exactly the same-cluster co-occurrence count for every pair at once, and the
-    valid-pair normaliser is ``valid.T @ valid``.
+    Negative labels are unassigned. Exclude those replicates for each pair.
+    Use zero for unobserved pairs and one on the diagonal.
     """
-    B, N = labels.shape
+    labels = np.asarray(labels)
+    if labels.ndim != 2 or not np.issubdtype(labels.dtype, np.integer):
+        raise DataError("Cluster labels must be a two-dimensional integer array.")
+    replicate_count, taxon_count = labels.shape
     valid = labels >= 0
-    valid_f = valid.astype(np.float64)
-
-    # counts[i, j] = number of replicates where both taxa are valid.
-    counts = valid_f.T @ valid_f
-
+    valid_values = valid.astype(float)
+    valid_pair_counts = valid_values.T @ valid_values
     if valid.any():
-        rep_idx, taxon_idx = np.nonzero(valid)  # aligned (replicate, taxon) pairs
-        lab = labels[rep_idx, taxon_idx]
-        n_clusters = int(lab.max()) + 1  # global upper bound on cluster ids
-        cols = rep_idx * n_clusters + lab
+        replicate_indices, taxon_indices = np.nonzero(valid)
+        cluster_keys = np.column_stack((replicate_indices, labels[valid]))
+        _, column_indices = np.unique(cluster_keys, axis=0, return_inverse=True)
         indicator = sparse.csr_matrix(
-            (np.ones(rep_idx.size), (taxon_idx, cols)),
-            shape=(N, B * n_clusters),
+            (np.ones(len(column_indices)), (taxon_indices, column_indices)),
+            shape=(taxon_count, int(column_indices.max()) + 1),
         )
-        numer = np.asarray((indicator @ indicator.T).todense(), dtype=np.float64)
+        same_cluster_counts = (indicator @ indicator.T).toarray()
     else:
-        numer = np.zeros((N, N), dtype=np.float64)
-
-    coassoc = np.zeros((N, N), dtype=np.float64)
-    mask = counts > 0
-    coassoc[mask] = numer[mask] / counts[mask]
-    np.fill_diagonal(coassoc, 1.0)
-    return coassoc
-
-
-def _tree_to_newick(tree) -> str:
-    """Serialise a Bio.Phylo tree to a Newick string (cheap, picklable)."""
-    buf = StringIO()
-    Phylo.write(tree, buf, "newick")
-    return buf.getvalue()
+        same_cluster_counts = np.zeros((taxon_count, taxon_count))
+    coassociation = np.zeros((taxon_count, taxon_count))
+    np.divide(
+        same_cluster_counts,
+        valid_pair_counts,
+        out=coassociation,
+        where=valid_pair_counts > 0,
+    )
+    np.fill_diagonal(coassociation, 1.0)
+    return coassociation
 
 
-def _replicate_labels(args) -> np.ndarray:
-    """Cluster one bootstrap replicate and return its taxa-aligned label vector.
-
-    Defined at module scope so it is picklable by ``ProcessPoolExecutor``.
-    ``tree`` may be a Bio.Phylo tree (serial path) or a Newick string (parallel
-    path); ``PhytClust`` accepts either.
-    """
-    tree, k, outgroup, min_cluster_size, pc_kwargs, taxa = args
-    pc = PhytClust(
-        tree=tree,
+def _cluster_bootstrap_replicate(arguments):
+    """Cluster supplied k values on an independent tree, reusing its DP tables."""
+    tree, k_values, outgroup, min_cluster_size, clustering_options, taxa = arguments
+    clustering = PhytClust(
+        tree=_copy_tree(tree),
         outgroup=outgroup,
         min_cluster_size=min_cluster_size,
-        **pc_kwargs,
+        **copy.deepcopy(clustering_options),
     )
-    res = pc.run(k=k, plot_scores=False)
-    cmap = res["clusters"][0]
-    return _labels_from_cmap(cmap, taxa)
+    clustering._ensure_dp(required_cap=max(k_values))
+    return {
+        k: _cluster_labels_for_taxa(clustering.get_clusters(k), taxa) for k in k_values
+    }
+
+
+def _bootstrap_labels(
+    trees, k_values, outgroup, min_cluster_size, clustering_options, n_jobs
+):
+    """Collect replicate labels for all candidate counts using one worker pool."""
+    trees = list(trees)
+    taxa = _common_taxon_names(trees)
+    for k in k_values:
+        _positive_integer(k, "k", InvalidKError)
+    _positive_integer(min_cluster_size, "min_cluster_size")
+    if n_jobs is not None:
+        if (
+            isinstance(n_jobs, (bool, np.bool_))
+            or not isinstance(n_jobs, Integral)
+            or (n_jobs != -1 and n_jobs < 1)
+        ):
+            raise ConfigurationError("n_jobs must be a positive integer, -1, or None.")
+    options = {} if clustering_options is None else dict(clustering_options)
+    if "tree" in options or "outgroup" in options or "min_cluster_size" in options:
+        raise ConfigurationError(
+            "Set tree, outgroup, and min_cluster_size through their named arguments."
+        )
+    payloads = [
+        (tree, k_values, outgroup, min_cluster_size, options, taxa) for tree in trees
+    ]
+    labels_by_k = {k: np.full((len(trees), len(taxa)), -1, dtype=int) for k in k_values}
+    if n_jobs == 1 or len(trees) == 1:
+        results = map(_cluster_bootstrap_replicate, payloads)
+        for replicate_index, result in enumerate(results):
+            for k in k_values:
+                labels_by_k[k][replicate_index] = result[k]
+    else:
+        from concurrent.futures import ProcessPoolExecutor
+
+        max_workers = None if n_jobs in (-1, None) else int(n_jobs)
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for replicate_index, result in enumerate(
+                executor.map(_cluster_bootstrap_replicate, payloads)
+            ):
+                for k in k_values:
+                    labels_by_k[k][replicate_index] = result[k]
+    return taxa, labels_by_k
 
 
 def compute_coassoc_for_k(
@@ -107,79 +150,60 @@ def compute_coassoc_for_k(
     outgroup: Optional[str] = None,
     min_cluster_size: int = 1,
     pc_kwargs: Optional[dict[str, Any]] = None,
-    n_jobs: int = 1,
+    n_jobs: Optional[int] = 1,
 ):
-    """For a given k, run PhytClust on each bootstrap tree and compute
-    co-association.
+    """Return common taxa, replicate labels, and pairwise co-association for k.
 
-    Parameters
-    ----------
-    n_jobs : int, default=1
-        Number of worker processes. Each replicate is fully independent, so
-        this is embarrassingly parallel. ``1`` runs serially (unchanged
-        behaviour); ``-1`` (or ``None``) uses all available cores; any other
-        positive integer caps the pool at that many workers.
-
-    Returns
-    -------
-    taxa : list[str]
-        Taxon names in order.
-    labels : ndarray of shape (B, N)
-        Cluster IDs per replicate (or -1 for missing).
-    coassoc : ndarray of shape (N, N)
-        Co-association frequencies.
+    Preserve input trees. Labels have shape (replicates, taxa); -1 means
+    unassigned. Co-association has shape (taxa, taxa).
+    Use n_jobs=1 for serial execution, or -1/None for available worker processes.
     """
-    if pc_kwargs is None:
-        pc_kwargs = {}
-
-    taxa = _taxon_order(trees)
-    B = len(trees)
-    N = len(taxa)
-    labels = np.full((B, N), -1, dtype=int)
-
-    if n_jobs == 1 or B <= 1:
-        for b, tree in enumerate(trees):
-            labels[b, :] = _replicate_labels(
-                (tree, k, outgroup, min_cluster_size, pc_kwargs, taxa)
-            )
-    else:
-        from concurrent.futures import ProcessPoolExecutor
-
-        max_workers = None if n_jobs in (-1, None) else int(n_jobs)
-        # Newick strings pickle more cheaply than live tree objects.
-        # and free of any Bio.Phylo cross-reference pickling quirks.
-        payloads = [
-            (_tree_to_newick(tree), k, outgroup, min_cluster_size, pc_kwargs, taxa)
-            for tree in trees
-        ]
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # executor.map preserves input order, so labels[b] stays aligned.
-            for b, lab in enumerate(executor.map(_replicate_labels, payloads)):
-                labels[b, :] = lab
-
-    coassoc = _coassoc_from_labels(labels)
-    return taxa, labels, coassoc
+    taxa, labels_by_k = _bootstrap_labels(
+        trees, [k], outgroup, min_cluster_size, pc_kwargs, n_jobs
+    )
+    labels = labels_by_k[k]
+    return taxa, labels, _pairwise_coassociation(labels)
 
 
-def stability_for_k(
-    coassoc: np.ndarray, counts: Optional[np.ndarray] = None
-) -> float:
-    """Average co-association over off-diagonal pairs.
+def stability_for_k(coassoc: np.ndarray, counts: Optional[np.ndarray] = None) -> float:
+    """Return mean pair consistency: 2 * abs(co-association - 0.5).
 
-    If ``counts`` (the per-pair number of replicates in which both taxa were
-    valid) is given, pairs that were never simultaneously valid (``counts == 0``,
-    e.g. taxa stripped from every replicate) are excluded from the mean instead
-    of being counted as structural zeros — otherwise they bias stability low.
+    Both consistent grouping and consistent separation score one; a pair
+    together in half the replicates scores zero. Exclude unobserved pairs
+    when counts are supplied. Without counts, every off-diagonal pair is used.
+    Return zero when no pairs remain. This measure alone does not identify
+    a useful number of clusters.
     """
-    N = coassoc.shape[0]
-    triu_idx = np.triu_indices(N, k=1)
-    vals = coassoc[triu_idx]
+    coassociation = np.asarray(coassoc, dtype=float)
+    if coassociation.ndim != 2 or coassociation.shape[0] != coassociation.shape[1]:
+        raise DataError("Co-association must be a square matrix.")
+    if not np.all(np.isfinite(coassociation)) or np.any(
+        (coassociation < 0) | (coassociation > 1)
+    ):
+        raise DataError(
+            "Co-association values must be finite and between zero and one."
+        )
+    if not np.allclose(coassociation, coassociation.T):
+        raise DataError("Co-association must be symmetric.")
+    pair_indices = np.triu_indices(len(coassociation), k=1)
+    pair_frequencies = coassociation[pair_indices]
     if counts is not None:
-        keep = counts[triu_idx] > 0
-        vals = vals[keep]
-    if vals.size == 0:
-        return 0.0
-    return float(np.mean(vals))
+        counts = np.asarray(counts, dtype=float)
+        if (
+            counts.shape != coassociation.shape
+            or not np.all(np.isfinite(counts))
+            or np.any(counts < 0)
+            or not np.allclose(counts, counts.T)
+        ):
+            raise DataError(
+                "Valid-pair counts must match the matrix and be finite, symmetric, and non-negative."
+            )
+        pair_frequencies = pair_frequencies[counts[pair_indices] > 0]
+    return (
+        float(np.mean(2 * np.abs(pair_frequencies - 0.5)))
+        if pair_frequencies.size
+        else 0.0
+    )
 
 
 def choose_k_by_stability(
@@ -189,51 +213,30 @@ def choose_k_by_stability(
     outgroup: Optional[str] = None,
     min_cluster_size: int = 1,
     pc_kwargs: Optional[dict[str, Any]] = None,
-    n_jobs: int = 1,
+    n_jobs: Optional[int] = 1,
 ):
-    """For each k in k_values, compute co-association and stability.
+    """Compare pair consistency for supplied candidate cluster counts.
 
-    Returns
-    -------
-    dict with keys:
-        best_k : int
-        scores : dict[int, float]
-        coassoc : dict[int, ndarray]
-        taxa : list[str]
+    Supply candidates from clustering-score peaks or another selection rule.
+    Consistency alone can favor trivial partitions. Return best_k, scores,
+    coassoc matrices, and taxon order. Equal scores select the smaller k.
+    Reuse each replicate's DP across candidates.
     """
+    k_values = list(k_values)
     if not k_values:
         raise DataError("k_values is empty; nothing to evaluate.")
-
-    scores = {}
-    coassoc_by_k = {}
-    taxa_ref = None
-
-    for k in k_values:
-        taxa, _labels, coassoc = compute_coassoc_for_k(
-            trees,
-            k,
-            outgroup=outgroup,
-            min_cluster_size=min_cluster_size,
-            pc_kwargs=pc_kwargs,
-            n_jobs=n_jobs,
-        )
-        if taxa_ref is None:
-            taxa_ref = taxa
-        elif taxa != taxa_ref:
-            raise DataError(
-                "Taxon order mismatch across k; this should not happen."
-            )
-
-        valid = (_labels >= 0).astype(np.float64)
-        counts = valid.T @ valid
-        scores[k] = stability_for_k(coassoc, counts)
-        coassoc_by_k[k] = coassoc
-
-    # Highest stability wins; ties break toward the smallest (most parsimonious) k.
-    best_k = max(scores, key=lambda kv: (scores[kv], -kv))
+    taxa, labels_by_k = _bootstrap_labels(
+        trees, k_values, outgroup, min_cluster_size, pc_kwargs, n_jobs
+    )
+    scores, coassoc_by_k = {}, {}
+    for k, labels in labels_by_k.items():
+        coassociation = _pairwise_coassociation(labels)
+        valid = (labels >= 0).astype(float)
+        scores[k] = stability_for_k(coassociation, valid.T @ valid)
+        coassoc_by_k[k] = coassociation
     return {
-        "best_k": best_k,
+        "best_k": max(scores, key=lambda k: (scores[k], -k)),
         "scores": scores,
         "coassoc": coassoc_by_k,
-        "taxa": taxa_ref,
+        "taxa": taxa,
     }
