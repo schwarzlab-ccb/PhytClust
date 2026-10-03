@@ -1,61 +1,93 @@
 import os
 import logging
 import warnings
-from typing import Any, Optional, Callable, Tuple, List
+from typing import Any, Optional, Callable, List
+from numbers import Integral
+from pathlib import Path
 import matplotlib.pyplot as plt
 
-from ..algo.dp import cluster_map
-from .draw import plot_cluster
+from ..exceptions import ConfigurationError
+from .plots import plot_cluster
 
 logger = logging.getLogger(__name__)
 
 
-def _get_map(pc, k: int):
-    """Retrieve or compute a cluster map for a given k."""
-    try:
-        get_clusters = getattr(pc, "get_clusters", None)
-        if callable(get_clusters):
-            return get_clusters(int(k))
-    except Exception:
-        pass
-    return cluster_map(pc, int(k))
+def _positive_count(value, name: str) -> int:
+    """Check that a plot count is a positive integer."""
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+        raise ConfigurationError(f"{name} must be a positive integer.")
+    return int(value)
 
 
-def _resolve_plot_targets(
-    pc,
-    *,
-    top_n: int,
-    k: Optional[int],
-    n: Optional[int],
-) -> list[tuple[int, dict]]:
-    """Resolve which k-values to plot.
+def _partition_maps(pc, counts) -> list[tuple[int, dict]]:
+    """Prepare the tables once and retrieve each requested partition."""
+    counts = list(dict.fromkeys(_positive_count(count, "k") for count in counts))
+    if not counts:
+        return []
+    pc._ensure_dp(required_cap=max(counts))
+    return [(count, pc._clusters(count)) for count in counts]
 
-    Precedence is preserved for backward compatibility:
-    explicit ``k`` > compatibility alias ``n`` > ``pc.k`` > ranked peaks.
-    """
-    clusters_to_plot: list[tuple[int, dict]] = []
+
+def _resolve_plot_targets(pc, *, top_n, k, n) -> list[tuple[int, dict]]:
+    """Use explicit k, then the old n argument, stored k, or ranked peaks."""
+    top_n = _positive_count(top_n, "top_n")
     if n is not None and k is None:
         warnings.warn(
             "Parameter 'n' is deprecated; use 'k' instead.",
             DeprecationWarning,
             stacklevel=3,
         )
+    selected_count = k if k is not None else n if n is not None else pc.k
+    counts = (
+        [selected_count]
+        if selected_count is not None
+        else (pc.peaks_by_rank or [])[:top_n]
+    )
+    return _partition_maps(pc, counts)
 
-    selected_k = k if k is not None else n if n is not None else pc.k
 
-    if selected_k is not None:
-        k_val = int(selected_k)
-        clmap = _get_map(pc, k_val)
-        if clmap is not None:
-            clusters_to_plot.append((k_val, clmap))
-        return clusters_to_plot
+def _style_cluster_figure(
+    figure, cluster_count, leaf_count, *, labels, resize, axis=None, title=None
+):
+    """Space leaf labels and apply a consistent title and branch axis."""
+    if resize:
+        width = figure.get_size_inches()[0]
+        height = leaf_count * 0.24 + 1 if labels else min(18, leaf_count * 0.035 + 1)
+        figure.set_size_inches(max(width, 8), min(250, max(2.5, height)))
+    axis = figure.axes[0] if axis is None else axis
+    axis.set_title(
+        f"PhytClust’s clusters at k = {cluster_count}" if title is None else title,
+        loc="left",
+        fontsize=12,
+        fontweight="semibold",
+        pad=14,
+    )
+    # The renderer uses a left-aligned centre title; remove it before adding ours.
+    axis.set_title("", loc="center")
+    axis.set_ylabel("")
+    if axis.xaxis.get_visible():
+        axis.set_xlabel(axis.get_xlabel() or "Branch length", fontsize=10, labelpad=8)
+        axis.tick_params(axis="x", labelsize=9, colors="#555555")
+        axis.spines["bottom"].set_color("#999999")
+        axis.spines["bottom"].set_linewidth(0.7)
+    figure.set_facecolor("white")
 
-    for k_val in (pc.peaks_by_rank or [])[:top_n]:
-        kv = int(k_val)
-        clmap = _get_map(pc, kv)
-        if clmap is not None:
-            clusters_to_plot.append((kv, clmap))
-    return clusters_to_plot
+
+def _save_or_show(figure, *, results_dir, save, filename, count, multiple):
+    """Save and close a figure, or display it."""
+    if not (save or results_dir):
+        plt.show()
+        return
+    output_name = Path(filename or f"tree_k{count}.png")
+    if filename and multiple:
+        output_name = output_name.with_name(
+            f"{output_name.stem}_k{count}{output_name.suffix}"
+        )
+    output_path = Path(results_dir or ".") / output_name
+    try:
+        figure.savefig(output_path, bbox_inches="tight", dpi=180, facecolor="white")
+    finally:
+        plt.close(figure)
 
 
 def plot_clusters(
@@ -72,7 +104,7 @@ def plot_clusters(
     hide_internal_nodes: Optional[bool] = None,
     width_scale: Optional[float] = None,
     height_scale: Optional[float] = None,
-    label_func: Optional[Callable[[Any], Tuple[float, str]]] = None,
+    label_func: Optional[Callable[[Any], str]] = None,
     show_branch_lengths: Optional[bool] = None,
     marker_size: Optional[int] = None,
     show_cluster_bars: bool = False,
@@ -81,9 +113,17 @@ def plot_clusters(
     layout: str = "rectangular",
     palette: Optional[List] = None,
     show_branch_axis: bool = True,
+    title: Optional[str] = None,
     **kwargs,
 ) -> None:
-    # Unset options fall back to ClusterPlotConfig; explicit arguments win.
+    """Draw selected partitions and optionally save each figure.
+
+    Explicit k takes precedence over stored k and ranked peaks. When several
+    partitions share a filename, append their k values. Labelled trees receive
+    extra vertical space unless an axis or height_scale is supplied. Use title
+    to replace the default heading; an empty string removes it.
+    """
+    automatic_height = height_scale is None and kwargs.get("ax") is None
     cluster_cfg = getattr(getattr(pc, "plot_config", None), "cluster", None)
 
     def _cfg(value, field, fallback):
@@ -98,25 +138,25 @@ def plot_clusters(
     show_branch_lengths = _cfg(show_branch_lengths, "show_branch_lengths", False)
     marker_size = _cfg(marker_size, "marker_size", 40)
 
-    if pc.clusters is None:
-        pc.clusters = {}
-
-    if pc.k is None and (pc.scores is None):
-        logger.info("Scores not available - continuing without a score plot.")
-
     clusters_to_plot = _resolve_plot_targets(pc, top_n=top_n, k=k, n=n)
 
     if not clusters_to_plot:
-        logger.warning("No clusters to plot - check your arguments.")
+        logger.warning("No partitions selected. Provide k or run peak selection first.")
         return
 
     if (save or results_dir) and results_dir is not None:
         os.makedirs(results_dir, exist_ok=True)
 
+    plot_tree = (
+        pc._tree_wo_outgroup
+        if pc.outgroup and pc._tree_wo_outgroup is not None
+        else pc.tree
+    )
+    kwargs.setdefault("line_width", 0.9)
     for k_val, clmap in clusters_to_plot:
         fig = plot_cluster(
             cluster=clmap,
-            tree=pc.tree,
+            tree=plot_tree,
             cmap=cmap,
             outlier=outlier,
             hide_internal_nodes=hide_internal_nodes,
@@ -126,7 +166,7 @@ def plot_clusters(
             label_func=label_func,
             show_branch_lengths=show_branch_lengths,
             marker_size=marker_size,
-            outgroup=pc.outgroup,
+            outgroup=None,
             results_dir=None,
             show_cluster_bars=show_cluster_bars,
             show_cluster_boxes=show_cluster_boxes,
@@ -137,14 +177,23 @@ def plot_clusters(
             **kwargs,
         )
 
-        if save or results_dir:
-            out_dir = results_dir or "."
-            out_name = filename or f"tree_k{k_val}.png"
-            out_path = os.path.join(out_dir, out_name)
-            fig.savefig(out_path, bbox_inches="tight")
-            plt.close(fig)
-        else:
-            plt.show()
+        _style_cluster_figure(
+            fig,
+            k_val,
+            len(clmap),
+            labels=show_terminal_labels,
+            resize=automatic_height,
+            axis=kwargs.get("ax"),
+            title=title,
+        )
+        _save_or_show(
+            fig,
+            results_dir=results_dir,
+            save=save,
+            filename=filename,
+            count=k_val,
+            multiple=len(clusters_to_plot) > 1,
+        )
 
 
 def plot_multiple_k(
@@ -156,93 +205,65 @@ def plot_multiple_k(
     show_terminal_labels: bool = False,
     hide_internal_nodes: bool = True,
     width_scale: float = 1.5,
-    height_scale: float = 0.08,
-    label_func: Optional[Callable[[Any], Tuple[float, str]]] = None,
+    height_scale: Optional[float] = None,
+    label_func: Optional[Callable[[Any], str]] = None,
     show_branch_lengths: bool = False,
     marker_size: int = 30,
     save: bool = False,
+    title: Optional[str] = None,
     **kwargs,
 ) -> None:
+    """Draw the supplied cluster counts, or the highest-ranked peaks.
+
+    Prepare the clustering tables once for the largest requested count.
+    Plotting and clustering errors are reported to the caller. Use title to
+    give every figure the same heading; an empty string removes it.
     """
-    Plot multiple cluster solutions (different k values).
-
-    Parameters
-    ----------
-    pc : PhytClust
-        The PhytClust object with computed clusters.
-    k_values : list[int], optional
-        Specific k values to plot. If None, uses top_n peaks.
-    results_dir : str, optional
-        Directory for saving output.
-    top_n : int, optional
-        Number of peaks to use if k_values not specified.
-    cmap : colormap, optional
-        Matplotlib colormap for clusters.
-    show_terminal_labels : bool, optional
-        Show leaf names.
-    hide_internal_nodes : bool, optional
-        Hide internal node markers.
-    width_scale : float, optional
-        Scale factor for subplot width.
-    height_scale : float, optional
-        Scale factor for subplot height.
-    label_func : callable, optional
-        Function to format labels.
-    show_branch_lengths : bool, optional
-        Show branch length labels.
-    marker_size : int, optional
-        Size of leaf markers.
-    save : bool, optional
-        Save figures to files named tree_k{k}.png.
-    **kwargs : dict
-        Additional arguments passed to plot_cluster.
-    """
-    if pc.clusters is None:
-        pc.clusters = {}
-
-    # Determine which k values to plot
-    clusters_to_plot: List[Tuple[int, dict]] = []
-
-    source = k_values if k_values is not None else (pc.peaks_by_rank or [])[:top_n]
-    for k_val in source:
-        try:
-            clmap = _get_map(pc, int(k_val))
-            if clmap is not None:
-                clusters_to_plot.append((int(k_val), clmap))
-        except Exception:
-            logger.warning("Could not compute clusters for k=%d", k_val)
-
-    if not clusters_to_plot:
-        logger.warning("No clusters to plot - check your arguments.")
+    top_n = _positive_count(top_n, "top_n")
+    counts = k_values if k_values is not None else (pc.peaks_by_rank or [])[:top_n]
+    targets = _partition_maps(pc, counts)
+    if not targets:
+        logger.warning(
+            "No partitions selected. Provide k_values or run peak selection first."
+        )
         return
-
-    if (save or results_dir) and results_dir is not None:
+    cluster_cfg = dict(
+        cmap=cmap,
+        show_terminal_labels=show_terminal_labels,
+        hide_internal_nodes=hide_internal_nodes,
+        width_scale=width_scale,
+        height_scale=0.08 if height_scale is None else height_scale,
+        label_func=label_func,
+        show_branch_lengths=show_branch_lengths,
+        marker_size=marker_size,
+    )
+    filename = kwargs.pop("filename", None)
+    if results_dir is not None:
         os.makedirs(results_dir, exist_ok=True)
-
-    for k_val, clmap in clusters_to_plot:
-        try:
-            fig_single = plot_cluster(
-                cluster=clmap,
-                tree=pc.tree,
-                cmap=cmap,
-                outlier=False,
-                hide_internal_nodes=hide_internal_nodes,
-                show_terminal_labels=show_terminal_labels,
-                width_scale=width_scale,
-                height_scale=height_scale,
-                label_func=label_func,
-                show_branch_lengths=show_branch_lengths,
-                marker_size=marker_size,
-                outgroup=pc.outgroup,
-                **kwargs,
-            )
-            if save or results_dir:
-                out_dir = results_dir or "."
-                out_name = f"tree_k{k_val}.png"
-                out_path = os.path.join(out_dir, out_name)
-                fig_single.savefig(out_path, bbox_inches="tight", dpi=150)
-                plt.close(fig_single)
-            else:
-                plt.show()
-        except Exception as e:
-            logger.warning("Error plotting k=%d: %s", k_val, e)
+    plot_tree = (
+        pc._tree_wo_outgroup
+        if pc.outgroup and pc._tree_wo_outgroup is not None
+        else pc.tree
+    )
+    kwargs.setdefault("line_width", 0.9)
+    for count, partition in targets:
+        figure = plot_cluster(
+            cluster=partition, tree=plot_tree, outgroup=None, **cluster_cfg, **kwargs
+        )
+        _style_cluster_figure(
+            figure,
+            count,
+            len(partition),
+            labels=show_terminal_labels,
+            resize=height_scale is None and kwargs.get("ax") is None,
+            axis=kwargs.get("ax"),
+            title=title,
+        )
+        _save_or_show(
+            figure,
+            results_dir=results_dir,
+            save=save,
+            filename=filename,
+            count=count,
+            multiple=len(targets) > 1,
+        )

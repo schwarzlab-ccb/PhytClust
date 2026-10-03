@@ -1,38 +1,35 @@
-"""PhytClust brand palette — single source of truth for all colors.
-
-The base palette starts from logo-derived tones and extends with harmonized
-accents. When more colors are needed, lighter/less opaque variants are
-generated automatically while preserving a readable alpha floor.
-"""
+"""Cluster colours and accent colours used in PhytClust plots."""
 
 from __future__ import annotations
 
-import numpy as np
+import math
+import warnings
+from numbers import Integral
+from collections.abc import Sequence
+
+from ..exceptions import ConfigurationError
 import matplotlib.colors as mcolors
 from matplotlib.colors import ListedColormap
 
-# Ordered so adjacent entries stay >=~50 Lab units apart: with few clusters,
-# neighbours never come out near-identical.
 BASE_HEX: list[str] = [
-    "#b84b4b",  # red
-    "#4f8f4a",  # green
-    "#da63aa",  # pink
-    "#ceb94b",  # gold
-    "#3f408a",  # indigo
-    "#c06f2e",  # amber brown
-    "#5b6bb3",  # slate blue
-    "#849060",  # olive
-    "#6e3f8a",  # purple
-    "#2f8a85",  # cyan teal
-    "#8f4b7f",  # magenta plum
-    "#3d7c74",  # teal
-    "#ad5c7a",  # rose
-    "#2f6f93",  # ocean blue
-    "#7a5d3b",  # earth
-    "#3f648a",  # steel blue
+    "#b84b4b",
+    "#4f8f4a",
+    "#da63aa",
+    "#ceb94b",
+    "#3f408a",
+    "#c06f2e",
+    "#5b6bb3",
+    "#849060",
+    "#6e3f8a",
+    "#2f8a85",
+    "#8f4b7f",
+    "#3d7c74",
+    "#ad5c7a",
+    "#2f6f93",
+    "#7a5d3b",
+    "#3f648a",
 ]
 
-# Colorblind-safe accent palette (for score-plot peaks / bin labels)
 ACCENT_HEX: list[str] = [
     "#0072B2",
     "#009E73",
@@ -47,54 +44,56 @@ ACCENT_HEX: list[str] = [
 BASE_RGBA: list[tuple[float, ...]] = [mcolors.to_rgba(h) for h in BASE_HEX]
 
 
+def _validate_color_count(value, *, allow_zero=True) -> int:
+    """Check the requested number of colours."""
+    minimum = 0 if allow_zero else 1
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
+        requirement = "zero or greater" if allow_zero else "greater than zero"
+        raise ConfigurationError(f"Colour count must be an integer {requirement}.")
+    return int(value)
+
+
 def expand_palette(
-    n: int,
-    base: list[str] | None = None,
+    n: int, base: Sequence[str | tuple[float, ...]] | None = None
 ) -> list[tuple[float, ...]]:
-    """Return *n* RGBA colors by cycling base colors with decreasing alpha.
+    """Return n colours, using lighter shades after the base colours.
 
-    For n <= len(base), returns the first n base colors.
-    For larger n, lightens and reduces alpha in successive rounds,
-    matching the GUI's ``generateClusterColors`` behavior.
+    Each round multiplies the original opacity by the round's opacity.
+    Lightening stops at 84% toward white; colours repeat after seven rounds.
+    Base colours retain their original order.
     """
-    base = base or BASE_HEX
-    base_rgba = [mcolors.to_rgba(h) for h in base]
-    if n <= len(base_rgba):
-        return base_rgba[:n]
-
-    colors: list[tuple[float, ...]] = []
-    min_alpha = 0.58
-    alpha_step = 0.12
-    light_step = 0.14
-    repeats = int(np.ceil(n / len(base_rgba)))
-    for r in range(repeats):
-        factor = r * light_step
-        alpha = max(1.0 - r * alpha_step, min_alpha)
-        for rgba in base_rgba:
-            adjusted = _adjust_lightness(rgba, factor)
-            colors.append((*adjusted[:3], alpha))
-    return colors[:n]
+    color_count = _validate_color_count(n)
+    base_colors = BASE_HEX if base is None else list(base)
+    if not base_colors:
+        raise ConfigurationError("The base palette must contain at least one colour.")
+    try:
+        base_rgba = [mcolors.to_rgba(color) for color in base_colors]
+    except (ValueError, TypeError) as error:
+        raise ConfigurationError(f"Invalid palette colour: {error}") from error
+    if any(not math.isfinite(channel) for color in base_rgba for channel in color):
+        raise ConfigurationError("Palette colour channels must be finite.")
+    if color_count > len(base_rgba) * 7:
+        warnings.warn(
+            f"Colours repeat beyond {len(base_rgba) * 7} entries. Use cluster labels for larger partitions.",
+            UserWarning,
+            stacklevel=2,
+        )
+    colors = []
+    for color_index in range(color_count):
+        round_index, base_index = divmod(color_index, len(base_rgba))
+        lightening_fraction = min(round_index * 0.14, 0.84)
+        round_opacity = max(1 - round_index * 0.12, 0.58)
+        color = _blend_toward_white(base_rgba[base_index], lightening_fraction)
+        colors.append((*color[:3], color[3] * round_opacity))
+    return colors
 
 
 def get_cmap(n: int = 20) -> ListedColormap:
-    """Return a PhytClust ``ListedColormap`` with *n* colors."""
-    return ListedColormap(expand_palette(n), name="phytclust")
+    """Return a PhytClust colormap with n colours; n must be positive."""
+    color_count = _validate_color_count(n, allow_zero=False)
+    return ListedColormap(expand_palette(color_count), name="phytclust")
 
 
-def _adjust_lightness(rgba: tuple[float, ...], factor: float) -> tuple[float, ...]:
-    """Shift lightness of an RGBA color by *factor* (-1..1)."""
-    r, g, b = rgba[:3]
-    if factor > 0:
-        r = r + (1 - r) * factor
-        g = g + (1 - g) * factor
-        b = b + (1 - b) * factor
-    elif factor < 0:
-        r = r * (1 + factor)
-        g = g * (1 + factor)
-        b = b * (1 + factor)
-    return (
-        max(0.0, min(1.0, r)),
-        max(0.0, min(1.0, g)),
-        max(0.0, min(1.0, b)),
-        rgba[3],
-    )
+def _blend_toward_white(rgba: tuple[float, ...], fraction: float) -> tuple[float, ...]:
+    """Blend RGB channels toward white, retaining the original opacity."""
+    return (*(channel + (1 - channel) * fraction for channel in rgba[:3]), rgba[3])
