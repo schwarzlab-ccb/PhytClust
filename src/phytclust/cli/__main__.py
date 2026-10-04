@@ -1,5 +1,4 @@
-# src/phytclust/cli/__main__.py
-from ._cli import main
+from .app import main
 
 if __name__ == "__main__":
     raise SystemExit(main())
