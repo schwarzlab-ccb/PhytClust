@@ -1,13 +1,10 @@
-/* ============================================================
-   PhytClust – api.js
-   API call + runPhytClust orchestration.
-   ============================================================ */
+/* Send clustering requests and update the result views. */
 
 import { state } from "./state.js";
 import { newickEl, extraOutgroupEl, extraRootTaxonEl, extraResolutionEl } from "./dom.js";
 import { showToast } from "./ui/toast.js";
 import { showStatus } from "./ui/status.js";
-import { estimateLeafCount, isOutgroupInNewick, parseNewick, readIntParam, readFloatParam, readCheckParam, readSelectParam } from "./utils.js";
+import { estimateLeafCount, parseNewick, readCheckParam, readSelectParam } from "./utils.js";
 import { generateClusterColors } from "./colors.js";
 import { drawTree, clearTree } from "./tree/draw.js";
 import { accumulateBranchLength, computeLayouts } from "./tree/layout.js";
@@ -16,203 +13,235 @@ import { populateCompareSelectors } from "./views/compare.js";
 import { drawOptimalK } from "./views/optimal_k.js";
 import { drawMiniScores } from "./views/scores_panel.js";
 
-async function apiPostJson(url, payload) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const text = await res.text();
-  let data = null;
+function responseError(detail, status) {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.map((issue) => {
+      const field = Array.isArray(issue?.loc) ? issue.loc.filter((part) => part !== "body").join(".") : "";
+      return typeof issue?.msg === "string" ? (field ? `${field}: ${issue.msg}` : issue.msg) : "";
+    }).filter(Boolean);
+    if (messages.length) return messages.join("; ");
+  }
+  return `Request failed (${status}).`;
+}
+
+async function postJson(url, payload) {
+  let response;
   try {
-    data = text ? JSON.parse(text) : null;
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   } catch {
-    /* ignore */
+    throw new Error("Could not reach the server. Check that the GUI server is running.");
   }
-  if (!res.ok) {
-    throw new Error(
-      data && data.detail ? data.detail : `Request failed (${res.status})`,
-    );
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(response.ok ? "The server returned an unreadable result." : `Request failed (${response.status}).`);
   }
+  if (!response.ok) throw new Error(responseError(data?.detail, response.status));
   return data;
 }
 
-function getCurrentMode() {
-  const activeBtn = document.querySelector("#mode-selector .mode-btn.active");
-  return activeBtn ? activeBtn.dataset.mode : "global";
+function currentMode() {
+  return document.querySelector("#mode-selector .mode-btn.active")?.dataset.mode || "global";
+}
+
+function readNumber(id, label, integer = false) {
+  const text = (document.getElementById(id)?.value || "").trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value) || (integer && (!Number.isSafeInteger(value) || value < 1))) {
+    throw new Error(`${label} must be ${integer ? "a positive whole number" : "a number"}.`);
+  }
+  return value;
+}
+
+export function buildRunRequest() {
+  const mode = currentMode();
+  const payload = { newick: (newickEl.value || "").trim(), mode };
+  const addNumber = (key, id, label, integer = false) => {
+    const value = readNumber(id, label, integer);
+    if (value !== null) payload[key] = value;
+  };
+  const outgroup = extraOutgroupEl?.value.trim();
+  const rootTaxon = extraRootTaxonEl?.value.trim();
+  if (outgroup) payload.outgroup = outgroup;
+  if (rootTaxon) payload.root_taxon = rootTaxon;
+  if (mode === "k") {
+    payload.k = readNumber("extra-k", "Cluster count", true);
+  } else {
+    addNumber("top_n", "extra-topn", "Peak count", true);
+    addNumber("max_k", "extra-maxk", "Maximum cluster count", true);
+    addNumber("max_k_limit", "extra-maxklimit", "Maximum cluster fraction");
+    const rankingMode = readSelectParam("extra-ranking-mode") || "adjusted";
+    payload.ranking_mode = rankingMode;
+    if (rankingMode === "adjusted") addNumber("prominence_weight", "extra-prominence-weight", "Prominence weight");
+    addNumber("min_prominence", "extra-min-prominence", "Minimum prominence");
+    payload.use_relative_prominence = readCheckParam("extra-relative-prom");
+    payload.exclude_k2 = readCheckParam("extra-exclude-k2");
+  }
+  if (mode === "resolution") {
+    addNumber("num_bins", "extra-bins", "Resolution class count", true);
+    payload.by_resolution = true;
+  }
+  if (mode === "global" && readCheckParam("extra-compute-all")) payload.compute_all_clusters = true;
+  addNumber("min_cluster_size", "extra-min-cluster-size", "Minimum cluster size", true);
+  if (readCheckParam("extra-use-support")) {
+    payload.use_branch_support = true;
+    addNumber("min_support", "extra-min-support", "Minimum support");
+    addNumber("support_weight", "extra-support-weight", "Support weight");
+  }
+  addNumber("outlier_size_threshold", "extra-outlier-threshold", "Outlier size threshold", true);
+  if (readCheckParam("extra-outlier-prefer-fewer")) payload.outlier_prefer_fewer = true;
+  const ratioMode = readSelectParam("extra-outlier-ratio-mode");
+  if (ratioMode && ratioMode !== "exp") payload.outlier_ratio_mode = ratioMode;
+  const polytomyMode = readSelectParam("extra-polytomy-mode");
+  if (polytomyMode) payload.polytomy_mode = polytomyMode;
+  if (readCheckParam("extra-no-split-zero")) payload.no_split_zero_length = true;
+  return payload;
+}
+
+export function refreshResultsStale() {
+  const marker = document.getElementById("results-stale-indicator");
+  if (!marker) return;
+  try {
+    marker.hidden = !state.latestApiData || state.lastRunSignature === JSON.stringify(buildRunRequest());
+  } catch {
+    marker.hidden = !state.latestApiData;
+  }
+}
+
+function prepareResult(data) {
+  if (!data || typeof data !== "object" || typeof data.newick !== "string" || !data.newick.trim() || !Array.isArray(data.clusters)) {
+    throw new Error("The server returned an incomplete result.");
+  }
+  for (const clusterMap of data.clusters) {
+    if (!clusterMap || typeof clusterMap !== "object" || Array.isArray(clusterMap) || Object.values(clusterMap).some((value) => !Number.isSafeInteger(value) || value < -1)) {
+      throw new Error("The server returned invalid cluster assignments.");
+    }
+  }
+  const tree = parseNewick(data.newick);
+  if (!tree || typeof tree !== "object") throw new Error("The returned tree could not be read.");
+  accumulateBranchLength(tree);
+  const clusterMap = data.clusters[0] || {};
+  let maximumClusterId = -1;
+  for (const clusterId of Object.values(clusterMap)) maximumClusterId = Math.max(maximumClusterId, clusterId);
+  return { tree, clusterMap, colors: generateClusterColors(maximumClusterId + 1) };
+}
+
+function drawScoreViews(data) {
+  try {
+    drawMiniScores(data);
+  } catch (error) {
+    console.warn("Could not draw the score preview:", error);
+    showToast("The score preview could not be drawn.", "warning", 3000);
+  }
+  const plotHost = document.getElementById("optimalk_plot");
+  state.latestOptimalKData = Array.isArray(data.scores) && data.scores.length ? data : null;
+  if (plotHost) plotHost.replaceChildren();
+  if (!state.latestOptimalKData) {
+    if (plotHost) {
+      const message = document.createElement("div");
+      message.className = "score-empty";
+      message.textContent = data.mode === "k" ? "Scores are not calculated for a fixed cluster count." : "No scores are available for this run.";
+      plotHost.appendChild(message);
+    }
+    return;
+  }
+  try {
+    drawOptimalK(data);
+  } catch (error) {
+    console.warn("Could not draw the score plot:", error);
+    showToast("The score plot could not be drawn.", "warning", 3000);
+  }
 }
 
 export async function runPhytClust() {
   if (state.isRunning) return;
-  var newickText = (newickEl.value || "").trim();
-  if (!newickText) {
-    showToast("Please upload or paste a Newick tree.", "danger", 4000);
-    return;
-  }
-
-  var numSamples = estimateLeafCount(newickText);
-  var mode = getCurrentMode();
-
-  var kVal = readIntParam("extra-k");
-  var outgroupVal =
-    (extraOutgroupEl ? (extraOutgroupEl.value || "").trim() : "") || null;
-  var rootTaxonVal =
-    (extraRootTaxonEl ? (extraRootTaxonEl.value || "").trim() : "") || null;
-  var topNVal = readIntParam("extra-topn");
-  var binsVal = readIntParam("extra-bins");
-  var maxKVal = readIntParam("extra-maxk");
-  var maxKLimitVal = readFloatParam("extra-maxklimit");
-  var promWeightVal = readFloatParam("extra-prominence-weight");
-  var minClusterVal = readIntParam("extra-min-cluster-size");
-
-  if (outgroupVal && !isOutgroupInNewick(newickText, outgroupVal)) {
-    showStatus("Outgroup not found in Newick.", "danger");
-    return;
-  }
-
-  if (extraResolutionEl) extraResolutionEl.checked = mode === "resolution";
-
-  var payload = { newick: newickText, mode: mode };
-  if (mode === "k") {
-    if (kVal === null) {
-      showToast("Please enter a value for k.", "danger");
-      return;
-    }
-    payload.k = kVal;
-  }
-  if (outgroupVal) payload.outgroup = outgroupVal;
-  if (rootTaxonVal) payload.root_taxon = rootTaxonVal;
-  if (topNVal !== null) payload.top_n = topNVal;
-  if (binsVal !== null) payload.num_bins = binsVal;
-  if (maxKVal !== null) payload.max_k = maxKVal;
-  if (maxKLimitVal !== null) payload.max_k_limit = maxKLimitVal;
-  if (promWeightVal !== null) payload.prominence_weight = promWeightVal;
-  if (minClusterVal !== null) payload.min_cluster_size = minClusterVal;
-  if (mode === "resolution") payload.by_resolution = true;
-
-  if (readCheckParam("extra-compute-all")) payload.compute_all_clusters = true;
-  if (readCheckParam("extra-use-support")) payload.use_branch_support = true;
-  var minSup = readFloatParam("extra-min-support");
-  if (minSup !== null) payload.min_support = minSup;
-  var supW = readFloatParam("extra-support-weight");
-  if (supW !== null) payload.support_weight = supW;
-
-  var outlierThresh = readIntParam("extra-outlier-threshold");
-  if (outlierThresh !== null) payload.outlier_size_threshold = outlierThresh;
-  if (readCheckParam("extra-outlier-prefer-fewer"))
-    payload.outlier_prefer_fewer = true;
-  var ratioMode = readSelectParam("extra-outlier-ratio-mode");
-  if (ratioMode && ratioMode !== "exp") payload.outlier_ratio_mode = ratioMode;
-
-  payload.optimize_polytomies = readCheckParam("extra-optimize-polytomies");
-  if (readCheckParam("extra-no-split-zero"))
-    payload.no_split_zero_length = true;
-
-  var rankMode = readSelectParam("extra-ranking-mode");
-  if (rankMode) payload.ranking_mode = rankMode;
-  var minProm = readFloatParam("extra-min-prominence");
-  if (minProm !== null) payload.min_prominence = minProm;
-  if (readCheckParam("extra-relative-prom"))
-    payload.use_relative_prominence = true;
-  payload.exclude_k2 = readCheckParam("extra-exclude-k2");
-
-  showStatus("Running PhytClust...", "info");
-  clearTree();
-
-  var runBtn = document.getElementById("btn-run");
+  let payload;
   try {
-    state.isRunning = true;
-    if (runBtn) {
-      runBtn.disabled = true;
-      runBtn.innerHTML = '<span class="spinner"></span> Running...';
-    }
-
-    const t0 = performance.now();
-    const data = await apiPostJson("/api/run", payload);
-    const dt = (performance.now() - t0) / 1000;
-
+    payload = buildRunRequest();
+    if (!payload.newick) throw new Error("Upload or paste a Newick tree.");
+    if (payload.mode === "k" && payload.k === null) throw new Error("Enter a cluster count.");
+  } catch (error) {
+    showToast(error.message, "danger", 4000);
+    return;
+  }
+  const runButton = document.getElementById("btn-run");
+  const originalButtonContent = runButton?.innerHTML;
+  const resultFields = ["NEWICK_RAW_TREE", "CURRENT_CLUSTERS", "CLUSTER_COLORS", "HIER_CART", "HIER_CIRC", "latestApiData", "latestRunId", "lastRunSignature", "latestOptimalKData", "CLUSTER_VIEW_MODE", "runHistory"];
+  const previousState = Object.fromEntries(resultFields.map((name) => [name, state[name]]));
+  let updatingViews = false;
+  state.isRunning = true;
+  if (extraResolutionEl) extraResolutionEl.checked = payload.mode === "resolution";
+  showStatus("Running PhytClust...", "info");
+  if (runButton) {
+    runButton.disabled = true;
+    runButton.innerHTML = '<span class="spinner"></span> Running...';
+  }
+  try {
+    const startedAt = performance.now();
+    const data = await postJson("/api/run", payload);
+    const prepared = prepareResult(data);
+    const elapsedSeconds = (performance.now() - startedAt) / 1000;
+    updatingViews = true;
+    state.NEWICK_RAW_TREE = prepared.tree;
+    state.CURRENT_CLUSTERS = prepared.clusterMap;
+    state.CLUSTER_COLORS = prepared.colors;
+    computeLayouts();
     state.latestApiData = data;
     state.latestRunId = data.run_id || null;
-
-    state.runHistory.unshift({
+    populateClusterSelector(data);
+    updateClusterEditorAvailability();
+    drawTree();
+    state.lastRunSignature = JSON.stringify(payload);
+    const leafCount = Object.keys(prepared.clusterMap).length;
+    const clusterCount = new Set(Object.values(prepared.clusterMap)).size;
+    const selectedCounts = data.k_values || data.ks || [];
+    showStatus(leafCount ? `k = ${clusterCount}${selectedCounts.length > 1 ? ` (rank 1 of ${selectedCounts.length})` : ""} · ${leafCount} leaves · ${elapsedSeconds.toFixed(2)}s` : `No partitions selected · ${elapsedSeconds.toFixed(2)}s`, leafCount ? "success" : "info");
+    state.runHistory = [{
       ts: Date.now(),
-      mode,
-      label:
-        mode === "k"
-          ? "k=" + (data.k != null ? data.k : kVal) + " · " + dt.toFixed(1) + "s"
-          : mode + " · " + dt.toFixed(1) + "s",
-      nLeaves: numSamples,
-    });
-    if (state.runHistory.length > 8) state.runHistory.pop();
-
-    showStatus(`Finished in ${dt.toFixed(2)}s`, "success");
-
-    var lcLabel = document.getElementById("leaf-count-label");
-    if (lcLabel && data.newick)
-      lcLabel.textContent = estimateLeafCount(data.newick) + " leaves";
-
-    if (data.newick) {
-      state.NEWICK_RAW_TREE = parseNewick(data.newick);
-      accumulateBranchLength(state.NEWICK_RAW_TREE);
-      computeLayouts();
-      populateClusterSelector(data);
+      mode: payload.mode,
+      label: `${payload.mode === "k" ? `k=${payload.k}` : payload.mode} · ${elapsedSeconds.toFixed(1)}s`,
+      nLeaves: estimateLeafCount(data.newick),
+    }, ...state.runHistory].slice(0, 8);
+    const leafCountLabel = document.getElementById("leaf-count-label");
+    if (leafCountLabel) leafCountLabel.textContent = `${estimateLeafCount(data.newick)} leaves`;
+    try {
+      populateCompareSelectors(data);
+    } catch (error) {
+      console.warn("Could not update comparison choices:", error);
+      showToast("Comparison choices could not be updated.", "warning", 3000);
+    }
+    drawScoreViews(data);
+    refreshResultsStale();
+  } catch (error) {
+    if (updatingViews) {
+      Object.assign(state, previousState, { isRunning: true });
       try {
-        populateCompareSelectors(data);
-      } catch (cmpErr) {
-        console.warn("Compare panel init error:", cmpErr);
-        showToast("Compare panel failed to initialize.", "danger", 2500);
+        if (previousState.latestApiData) {
+          populateClusterSelector(previousState.latestApiData);
+          updateClusterEditorAvailability();
+        }
+        if (previousState.NEWICK_RAW_TREE) drawTree();
+        else clearTree();
+      } catch (restoreError) {
+        console.warn("Could not redraw the previous tree:", restoreError);
       }
-
-      const clusterMap =
-        data.clusters && data.clusters.length > 0 ? data.clusters[0] : {};
-      state.CURRENT_CLUSTERS = clusterMap;
-      if (Object.keys(clusterMap).length > 0) {
-        state.CLUSTER_COLORS = generateClusterColors(
-          Math.max(...Object.values(clusterMap)) + 1,
-        );
-      } else {
-        state.CLUSTER_COLORS = [];
-        showStatus("No clusters found.", "danger");
-      }
-      updateClusterEditorAvailability();
-      drawTree();
-    } else {
-      clearTree();
-      showStatus("No Newick tree returned by API.", "danger");
     }
-
-    try {
-      drawMiniScores(data);
-    } catch (e) {
-      console.warn("Mini scores error:", e);
-    }
-
-    try {
-      if (data && data.scores) {
-        var plotHost = document.getElementById("optimalk_plot");
-        if (plotHost) plotHost.innerHTML = "";
-        state.latestOptimalKData = data;
-        drawOptimalK(state.latestOptimalKData);
-      } else {
-        var plotHost2 = document.getElementById("optimalk_plot");
-        if (plotHost2)
-          plotHost2.innerHTML =
-            '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--pc-text-muted);font-size:14px;">Score plot unavailable in fixed k mode.</div>';
-      }
-    } catch (plotErr) {
-      console.warn("Plot rendering error:", plotErr);
-    }
-  } catch (e) {
-    console.error(e);
-    showStatus("Error: " + e.message, "danger");
-    state.latestOptimalKData = null;
-    state.latestApiData = null;
+    console.error(error);
+    showStatus(`Error: ${error.message}${previousState.latestApiData ? " (previous result retained)" : ""}`, "danger");
+    refreshResultsStale();
   } finally {
     state.isRunning = false;
-    if (runBtn) {
-      runBtn.disabled = false;
-      runBtn.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="3,1 13,8 3,15"/></svg> Run PhytClust';
+    if (runButton) {
+      runButton.disabled = false;
+      runButton.innerHTML = originalButtonContent;
     }
   }
 }

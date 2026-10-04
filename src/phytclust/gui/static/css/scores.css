@@ -66,3 +66,12 @@
   stroke-width: 2.5 !important;
   filter: drop-shadow(0 0 3px var(--pc-accent-glow, rgba(61, 139, 122, 0.5)));
 }
+
+.score-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--pc-text-muted);
+  font-size: 14px;
+}

@@ -26,6 +26,11 @@ phytclust gui --public        # public-safe mode (tip cap, no server-side save)
 phytclust gui --reload        # auto-reload for development
 ```
 
+Ports must be between 1 and 65535. The browser opens after server startup;
+`--no-browser` disables it. With `--reload`, open the URL manually. Wildcard
+listeners (`--host 0.0.0.0` or `--host ::`) use a loopback URL for the local
+browser.
+
 See `phytclust gui --help` for all options.
 
 Or run uvicorn directly (useful for custom deployment):
@@ -42,3 +47,7 @@ Set `PHYTCLUST_PUBLIC_MODE=1` (or pass `--public`) when exposing the server
 beyond localhost. It caps the input tip count (`PHYTCLUST_MAX_TIPS`, default
 10000) and disables the server-side `/api/save` endpoint; use **Export TSV** in
 the UI instead.
+
+Run requests require positive integer counts and one of the modes `k`, `global`, or `resolution`. Exact-k requests ignore peak settings. Nonfinite scores and alpha values are returned as JSON null.
+
+TSV exports use stored assignments. An optional `run_id` selects an earlier run; omitting it selects the latest result. Server-side saves also accept `run_id` for a stored TSV, or `tsv` for the table currently displayed in the GUI. Saves that use the live clustering instance wait for any active run to finish.

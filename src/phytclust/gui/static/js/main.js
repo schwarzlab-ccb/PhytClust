@@ -15,7 +15,7 @@ import { handleFileSelect, loadFile } from "./ui/file.js";
 import { exportSvgFromEl, exportPngFromEl, exportTSV, saveToServer, copySvgToClipboard, copyRasterToClipboard } from "./ui/export.js";
 import { wireAppearanceTrigger } from "./ui/appearance_panel.js";
 import { collectSession, applySession, sessionSizeWarning } from "./session.js";
-import { runPhytClust } from "./api.js";
+import { runPhytClust, refreshResultsStale } from "./api.js";
 import { drawTree, fitTree, clearAllCollapsedFlags, clearTree } from "./tree/draw.js";
 import { hideNodeContextMenu, showNodeContextMenu, getNodeCustom, nodeDisplayName } from "./tree/nodes.js";
 import { fitCompare } from "./tree/compare.js";
@@ -95,6 +95,8 @@ document.addEventListener("DOMContentLoaded", function () {
     btnClearTree.addEventListener("click", function () {
       state.NEWICK_RAW_TREE = null;
       state.latestApiData = null;
+      state.lastRunSignature = null;
+      refreshResultsStale();
       state.CURRENT_CLUSTERS = {};
       state.CLUSTER_COLORS = [];
       if (newickEl) newickEl.value = "";
@@ -269,6 +271,7 @@ document.addEventListener("DOMContentLoaded", function () {
     resetBtn.addEventListener("click", function (e) {
       e.preventDefault();
       resetExtraParams();
+      refreshResultsStale();
       showToast("Parameters reset to defaults.", "info", 2000);
     });
 
@@ -288,6 +291,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (paramBins)
         paramBins.style.display = mode === "resolution" ? "" : "none";
       if (extraResolutionEl) extraResolutionEl.checked = mode === "resolution";
+      refreshResultsStale();
     });
   });
 
@@ -321,15 +325,20 @@ document.addEventListener("DOMContentLoaded", function () {
     const warn = sessionSizeWarning(session);
     if (warn) console.info("[phytclust session] " + warn);
   }
-  // Refresh whenever the user changes a sidebar input or the include-tree toggle.
   document.querySelectorAll(
     ".sidebar input, .sidebar select, .sidebar textarea, #session-include-newick",
   ).forEach(function (el) {
-    el.addEventListener("change", function () {
-      if (document.getElementById("debug").classList.contains("active")) {
-        refreshSessionPanel();
-      }
-    });
+    for (const eventName of ["input", "change"]) {
+      el.addEventListener(eventName, function () {
+        refreshResultsStale();
+        if (
+          eventName === "change" &&
+          document.getElementById("debug").classList.contains("active")
+        ) {
+          refreshSessionPanel();
+        }
+      });
+    }
   });
 
   var btnSessionDl = document.getElementById("btn-session-download");

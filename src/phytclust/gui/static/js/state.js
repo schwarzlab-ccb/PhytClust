@@ -14,6 +14,7 @@ export const state = {
   isRunning: false,
   latestOptimalKData: null,
   latestApiData: null,
+  lastRunSignature: null,
   latestRunId: null,
   LAST_TREE_SVG: null,
   LAST_TREE_ZOOM: null,

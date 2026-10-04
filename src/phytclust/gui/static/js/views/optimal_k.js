@@ -236,7 +236,7 @@ export function drawOptimalK(data) {
     .attr("text-anchor", "middle")
     .attr("font-size", 12)
     .attr("fill", tc.internal)
-    .text("CalBow Score");
+    .text("Clustering validity index");
 
   // Line + points
   const lineColor = tc.accent;

@@ -51,6 +51,13 @@
   gap: 8px;
   flex-shrink: 0;
 }
+.results-stale-indicator {
+  color: var(--pc-warning);
+  font-weight: 600;
+}
+.results-stale-indicator[hidden] {
+  display: none;
+}
 .status-dot {
   width: 6px;
   height: 6px;

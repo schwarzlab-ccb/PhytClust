@@ -292,28 +292,49 @@ export function copySvgToClipboard(selector, opts = {}) {
   );
 }
 
-export async function exportTSV() {
-  try {
-    const res = await fetch("/api/export_tsv", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ top_n: 1, outlier: true, run_id: state.latestRunId }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Export failed");
-    }
-    downloadBlob(
-      new Blob([await res.text()], { type: "text/tab-separated-values" }),
-      "phytclust_results.tsv",
-    );
-    showToast("Downloaded TSV", "success", 2000);
-  } catch (e) {
-    showToast("TSV export failed: " + e.message, "danger");
+function currentTSV() {
+  const cmap = state.CURRENT_CLUSTERS || {};
+  const names = Object.keys(cmap);
+  if (!names.length) {
+    return null;
   }
+  const counts = {};
+  for (const name of names) counts[cmap[name]] = (counts[cmap[name]] || 0) + 1;
+  const k = Object.keys(counts).length;
+  const markEl = document.getElementById("extra-outlier");
+  const markOutliers = !markEl || markEl.checked;
+  const threshEl = document.getElementById("extra-outlier-threshold");
+  const thresh = threshEl && threshEl.value !== "" ? parseInt(threshEl.value, 10) : NaN;
+  const isOutlier = (cid) =>
+    markOutliers &&
+    (Number.isFinite(thresh) ? counts[cid] < thresh : counts[cid] === 1);
+  const rows = names.map((name) => name + "\t" + (isOutlier(cmap[name]) ? -1 : cmap[name]));
+  return {
+    text: "Node Name\tclusters_k" + k + "\n" + rows.join("\n") + "\n",
+    filename: `phytclust_k${k}.tsv`,
+    k,
+  };
+}
+
+export function exportTSV() {
+  const current = currentTSV();
+  if (!current) {
+    showToast("Nothing to export yet. Run PhytClust first.", "danger");
+    return;
+  }
+  downloadBlob(
+    new Blob([current.text], { type: "text/tab-separated-values" }),
+    current.filename,
+  );
+  showToast(`Downloaded k=${current.k} TSV`, "success", 2000);
 }
 
 export async function saveToServer() {
+  const current = currentTSV();
+  if (!current) {
+    showToast("Nothing to save yet. Run PhytClust first.", "danger");
+    return;
+  }
   var el = document.getElementById("output-dir");
   const dir = el && el.value ? el.value : "results";
   try {
@@ -322,8 +343,8 @@ export async function saveToServer() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         results_dir: dir,
-        top_n: 1,
-        outlier: true,
+        filename: current.filename,
+        tsv: current.text,
       }),
     });
     const text = await res.text();

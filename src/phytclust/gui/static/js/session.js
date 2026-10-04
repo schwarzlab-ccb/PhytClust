@@ -52,7 +52,7 @@ const PARAM_FIELDS = [
   { path: "params.peak.exclude_k2", id: "extra-exclude-k2", type: "checkbox" },
 
   // polytomy
-  { path: "params.polytomy.optimize", id: "extra-optimize-polytomies", type: "checkbox" },
+  { path: "params.polytomy.mode", id: "extra-polytomy-mode", type: "select" },
   { path: "params.polytomy.no_split_zero", id: "extra-no-split-zero", type: "checkbox" },
 
   // branch support
@@ -228,6 +228,7 @@ export function applySession(session) {
     const newickEl = document.getElementById("newick-input");
     if (newickEl) {
       newickEl.value = session.newick.trim();
+      newickEl.dispatchEvent(new Event("change", { bubbles: true }));
       hadNewick = true;
     }
   }

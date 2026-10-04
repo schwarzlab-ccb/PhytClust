@@ -5,12 +5,7 @@
 
 import { state } from "./state.js";
 
-// Cluster fill colors. Same brand tones, led by red, but ordered so consecutive
-// entries are always perceptually far apart (every adjacent pair >=~50 Lab
-// units): neighbouring clusters never get near-identical colours. Matches
-// viz/palette.py:BASE_HEX so in-app colours equal the saved matplotlib figures.
-// (This is the cluster palette only — the brand gradient strip lives in the
-// --pc-palette-* CSS variables in base.css and is intentionally a smooth sweep.)
+// Cluster colours share their order and expansion with viz/palette.py.
 export const BASE_COLORS = [
   "#b84b4b", // red
   "#4f8f4a", // green
@@ -39,12 +34,10 @@ export function shuffle(arr) {
   return a;
 }
 
-export function adjustLight(hex, factor) {
-  const num = parseInt(hex.slice(1), 16);
-  let r = (num >> 16) + factor * 255;
-  let g = ((num >> 8) & 0xff) + factor * 255;
-  let b = (num & 0xff) + factor * 255;
-  return `rgb(${Math.min(255, Math.max(0, r)) | 0}, ${Math.min(255, Math.max(0, g)) | 0}, ${Math.min(255, Math.max(0, b)) | 0})`;
+export function adjustLight(hex, fraction) {
+  const value = parseInt(hex.slice(1), 16);
+  const blend = (channel) => channel + (255 - channel) * fraction;
+  return `rgb(${blend(value >> 16)}, ${blend((value >> 8) & 0xff)}, ${blend(value & 0xff)})`;
 }
 
 export function withAlpha(color, alpha) {
@@ -55,7 +48,13 @@ export function withAlpha(color, alpha) {
 }
 
 export function generateClusterColors(nClusters) {
+  if (!Number.isInteger(nClusters) || nClusters < 0) {
+    throw new RangeError("Colour count must be an integer zero or greater.");
+  }
   let palette = BASE_COLORS.slice();
+  if (nClusters > palette.length * 7) {
+    console.warn(`Colours repeat beyond ${palette.length * 7} entries. Use cluster labels for larger partitions.`);
+  }
   if (nClusters <= palette.length) return palette.slice(0, nClusters);
   let colors = [];
   const minAlpha = 0.58;
@@ -63,7 +62,7 @@ export function generateClusterColors(nClusters) {
   const lightStep = 0.14;
   const repeats = Math.ceil(nClusters / palette.length);
   for (let r = 0; r < repeats; r++) {
-    const factor = r * lightStep;
+    const factor = Math.min(r * lightStep, 0.84);
     const alpha = Math.max(1 - r * alphaStep, minAlpha);
     palette.forEach((hex) => {
       const adjusted = adjustLight(hex, factor);
