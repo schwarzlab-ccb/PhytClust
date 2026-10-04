@@ -32,12 +32,9 @@ def validate_clustering_parameters(clustering) -> None:
             check_count(name, value, error=InvalidKError)
     check_count("min_cluster_size", clustering.min_cluster_size)
     check_count("max_tied_optima", getattr(clustering, "max_tied_optima", 100))
-    if clustering.outlier.size_threshold is not None:
-        check_count("outlier.size_threshold", clustering.outlier.size_threshold)
+    clustering.outlier.validate()
     if not _finite_number(clustering.max_k_limit):
         raise ConfigurationError("max_k_limit must be a finite number.")
-    if not _finite_number(clustering.outlier.ratio_weight):
-        raise ConfigurationError("outlier.ratio_weight must be a finite number.")
     if clustering.use_branch_support:
         if not _finite_number(clustering.support_weight) or clustering.support_weight < 0:
             raise ConfigurationError("support_weight must be a finite number of zero or greater.")
@@ -49,19 +46,6 @@ def validate_clustering_parameters(clustering) -> None:
         raise InvalidKError("k must be ≥ 1 if provided.")
     if not 0 < clustering.max_k_limit <= 1:
         raise ConfigurationError("max_k_limit must be between 0 and 1")
-
-    if clustering.outlier.ratio_weight < 0:
-        raise ConfigurationError("outlier.ratio_weight must be ≥ 0")
-
-    if clustering.outlier.ratio_mode not in {"exp", "inverse", "power"}:
-        raise ConfigurationError(
-            "outlier.ratio_mode must be one of: 'exp', 'inverse', 'power'"
-        )
-
-    if clustering.outlier.prefer_fewer and clustering.outlier.size_threshold is None:
-        raise ConfigurationError(
-            "outlier.prefer_fewer=True requires outlier.size_threshold to be set."
-        )
 
     polytomy_mode = getattr(clustering, "polytomy_mode", "soft")
     if polytomy_mode not in {"hard", "soft"}:

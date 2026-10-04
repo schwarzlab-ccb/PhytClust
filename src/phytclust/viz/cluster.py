@@ -73,7 +73,7 @@ def _style_cluster_figure(
     figure.set_facecolor("white")
 
 
-def _save_or_show(figure, *, results_dir, save, filename, count, multiple):
+def _save_or_show(figure, *, results_dir, save, filename, count, multiple, dpi=180):
     """Save and close a figure, or display it."""
     if not (save or results_dir):
         plt.show()
@@ -85,7 +85,7 @@ def _save_or_show(figure, *, results_dir, save, filename, count, multiple):
         )
     output_path = Path(results_dir or ".") / output_name
     try:
-        figure.savefig(output_path, bbox_inches="tight", dpi=180, facecolor="white")
+        figure.savefig(output_path, bbox_inches="tight", dpi=dpi, facecolor="white")
     finally:
         plt.close(figure)
 
@@ -114,6 +114,7 @@ def plot_clusters(
     palette: Optional[List] = None,
     show_branch_axis: bool = True,
     title: Optional[str] = None,
+    dpi: int = 180,
     **kwargs,
 ) -> None:
     """Draw selected partitions and optionally save each figure.
@@ -123,6 +124,7 @@ def plot_clusters(
     extra vertical space unless an axis or height_scale is supplied. Use title
     to replace the default heading; an empty string removes it.
     """
+    dpi = _positive_count(dpi, "dpi")
     automatic_height = height_scale is None and kwargs.get("ax") is None
     cluster_cfg = getattr(getattr(pc, "plot_config", None), "cluster", None)
 
@@ -193,6 +195,7 @@ def plot_clusters(
             filename=filename,
             count=k_val,
             multiple=len(clusters_to_plot) > 1,
+            dpi=dpi,
         )
 
 
@@ -211,6 +214,7 @@ def plot_multiple_k(
     marker_size: int = 30,
     save: bool = False,
     title: Optional[str] = None,
+    dpi: int = 180,
     **kwargs,
 ) -> None:
     """Draw the supplied cluster counts, or the highest-ranked peaks.
@@ -219,6 +223,7 @@ def plot_multiple_k(
     Plotting and clustering errors are reported to the caller. Use title to
     give every figure the same heading; an empty string removes it.
     """
+    dpi = _positive_count(dpi, "dpi")
     top_n = _positive_count(top_n, "top_n")
     counts = k_values if k_values is not None else (pc.peaks_by_rank or [])[:top_n]
     targets = _partition_maps(pc, counts)
@@ -266,4 +271,5 @@ def plot_multiple_k(
             filename=filename,
             count=count,
             multiple=len(targets) > 1,
+            dpi=dpi,
         )
