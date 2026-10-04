@@ -5,9 +5,9 @@
 ## The problem
 
 Given a rooted phylogenetic tree, split its leaves into groups such that every
-group is a **clade** — a complete subtree containing all descendants of its
-root. This property is monophyly, and it is what makes a cluster interpretable.
-A clade is everything descended from one ancestor.
+group is a **clade**: a complete subtree containing all descendants of its
+root. This property is monophyly. Soft polytomy mode also allows groups of
+children at an unresolved node to form a cluster, as described below.
 
 The question is which of the possible partitions of a tree into *k* monophyletic
 groups is best.
@@ -26,7 +26,7 @@ than enforced by filtering afterwards.
 ## The objective: within-cluster dispersion
 
 A partition is scored by summing, over every cluster, the distance from each
-member leaf to that cluster's MRCA — the deepest node containing every leaf of
+member leaf to that cluster's MRCA: the deepest node containing every leaf of
 the cluster. Shorter mean distance to the MRCA means a tighter group. Long
 branches at the cuts separate well-differentiated lineages; short distances
 inside a cluster keep similar taxa together.
@@ -42,8 +42,8 @@ Three cost definitions are plausible for a cluster containing leaves A, B, C:
    costs O(*n*²) per cluster and does not decompose when walking up the tree.
 3. **Sum of leaf-to-MRCA distances.** What PhytClust uses.
 
-The third factors recursively. Extending a cluster up by one branch — merging it
-with its sibling at the parent — gives a new cost of the old cost plus
+The leaf-to-MRCA cost can be updated recursively. Extending a cluster up by
+one branch adds
 `(branch length) × (number of leaves in the cluster)`, because every leaf below
 the new branch picks up that branch's length exactly once.
 
@@ -78,7 +78,7 @@ Three quantities are involved, and only the last of them is "the score curve"
 that the rest of the documentation refers to.
 
 **1. The DP cost, β(*k*).** The minimum total within-cluster dispersion
-achievable with *k* clusters — the objective defined above. It decreases
+achievable with *k* clusters: the objective defined above. It decreases
 monotonically with *k*, so it has no peaks and is never itself peak-detected.
 
 **2. The validity score, V(*k*).** How much of the dispersion has been explained
@@ -97,7 +97,7 @@ E(k) = (β(k−1) − β(k)) / (β(k) − β(k+1))
 ```
 
 E is large exactly at an elbow, where a large gain is followed by a small one. It
-is clamped to at most 50 so that a near-zero denominator cannot dominate, and it
+is limited to 50 so that a near-zero denominator cannot dominate, and it
 is 0 wherever either neighbouring drop is below `1e-12 · β(1)`. That threshold
 is relative, so rescaling every branch length leaves the curve unchanged.
 
@@ -110,14 +110,14 @@ however small the cluster structure behind it.
 Peaks are sought over *k* from 2 up to the maximum. `find_peaks` cannot report
 the first sample of a curve, so *k* = 2 is judged by a separate boundary test
 (see [*k* = 2 and the boundary test](#k-2-and-the-boundary-test)), and peaks are
-ranked by **prominence**, the
-height of a peak relative to its neighbours.
+ranked by the configured blend of peak prominence and score height. Optional
+partition preferences can also use cluster sizes when ranking candidates.
 
 ### Relationship to the Calinski-Harabasz index
 
-The validity score V(*k*) above is a **tree-adapted analogue of the
-Calinski-Harabasz index, not the CH index itself**. The correspondence is close
-enough to be worth stating precisely, because the differences are deliberate.
+The clustering validity index V(*k*) uses a ratio similar to the
+Calinski-Harabasz index, with leaf-to-MRCA distances and a different weight.
+The following comparison explains those differences.
 
 Textbook CH, for flat data in Euclidean space, is
 
@@ -147,23 +147,20 @@ degrees-of-freedom correction on a significance test; it is a resolution weight
 used to rank peaks against each other, and using *k* keeps it finite at *k* = 1,
 where CH is undefined.
 
-This is not a cosmetic change. The two forms differ by a factor of
-`(k − 1)/k`, which is `0.5` at *k* = 2, `0.9` at *k* = 10 and approaches `1` as
-*k* grows — so relative to CH, the PhytClust weight penalises small *k* and
-converges with CH at large *k*. It can therefore reorder peaks, and it is
-intended to: the smallest *k* values are the least informative on a tree (see
-[*k* = 2 and the boundary test](#k-2-and-the-boundary-test)). The practical consequence is that the
-reported numbers are not CH values and should not be compared against published
-CH thresholds.
+The two weights differ by a factor of `(k − 1)/k`: `0.5` at *k* = 2, `0.9`
+at *k* = 10, and approaching `1` as *k* grows. This gives smaller *k* values
+less weight relative to CH and can change peak order. The reported values use
+the PhytClust clustering validity index and should not be compared with CH
+thresholds.
 
 ### How peaks are ranked
 
 Two properties describe a peak, and they do not always agree:
 
-- **Prominence** — how far the peak rises above the surrounding curve. A modest
+- **Prominence**: how far the peak rises above the surrounding curve. A modest
   bump in a flat stretch is prominent; a taller bump on an already-high shoulder
   is not.
-- **Absolute score** — the peak's height on the *y* axis, ignoring context.
+- **Absolute score**: the peak's height on the *y* axis, ignoring context.
 
 `prominence_weight` sets the balance between them. At `1.0` peaks are ranked by
 prominence alone, at `0.0` by absolute score alone, and the default `0.7` leans
@@ -174,6 +171,22 @@ detected peaks before being blended.
 That normalise-then-blend behaviour is what `ranking_mode="adjusted"` (the
 default) means. `ranking_mode="raw"` instead ranks by absolute prominence with
 no normalisation and ignores `prominence_weight`.
+
+### Ranking by cluster sizes
+
+`partition_preference="fewer_outliers"` prefers peaks with fewer singleton
+cells. `partition_preference="balanced"` also prefers more even cluster sizes.
+Both reorder detected candidates without changing the DP partitions or score
+curve. The singleton counts are independent of the outlier size threshold.
+
+For cluster sizes `s` and total leaf count `n`, size balance is
+`n**2 / (k * sum(s**2))`. It equals one for equal sizes. Balanced quality
+multiplies this by `1 - singleton_count / n`. A partition consisting entirely
+of singletons therefore has zero quality.
+
+`partition_weight` blends peak strength with partition quality. Zero keeps the
+existing order; one uses partition quality alone. The default preference is
+`"none"`, so this option is disabled unless requested.
 
 ### *k* = 2 and the boundary test
 
@@ -192,7 +205,7 @@ and *k* = 2 then dominates the ranking. When that split is not what you are
 after, `exclude_k2=True`, or `--exclude-k2` on the CLI, drops it from automatic
 selection: in `top_n` mode the next-ranked peak takes its slot, and in resolution
 mode a bin that would have selected *k* = 2 advances to its next candidate. An
-explicit `run(k=2)` always returns *k* = 2 — the flag affects automatic
+explicit `run(k=2)` always returns *k* = 2: the flag affects automatic
 selection only.
 
 ## Polytomies
@@ -200,10 +213,10 @@ selection only.
 A polytomy is an internal node with more than two children. Real phylogenies
 contain them for two distinct reasons:
 
-- **Soft polytomies** — the data could not resolve the branching order and an
+- **Soft polytomies**: the data could not resolve the branching order and an
   inference tool collapsed an uncertain bifurcation. The underlying tree is
   binary; the resolution is simply not recoverable from the data.
-- **Hard polytomies** — several lineages diverged in rapid succession (rapid
+- **Hard polytomies**: several lineages diverged in rapid succession (rapid
   radiation, gene duplication bursts) and there is no internal binary structure
   to recover.
 
@@ -232,11 +245,8 @@ all-or-nothing. At the polytomy node the DP has exactly two kinds of option:
 - merge **none** of them, so that every cluster lies entirely inside one child
   subtree.
 
-There is no third option. A *proper subset* of the children — some but not all —
-can never be grouped into one cluster. This is what makes it a faithful model of
-a hard multifurcation: since the tree asserts that these lineages diverged
-simultaneously, it provides no grounds for preferring `{A,B}` over `{B,C}`, and
-hard mode declines to invent one.
+Hard mode cannot group a proper subset of the children into one cluster.
+It retains the branching relationships represented in the input tree.
 
 **Soft mode** (`--polytomy-mode soft`, the default) removes exactly that restriction. Any
 subset of the children may be grouped, by treating them as though they hung from
@@ -268,7 +278,7 @@ with `--polytomy-mode hard`, or raise the limit deliberately.
 
 Note that `F` in the diagram is a *sibling* of the polytomy, not one of its
 children, so no polytomy setting can group `A` with `F` without also taking the
-rest of the polytomy — that grouping is governed by the ordinary DP, not by
+rest of the polytomy: that grouping is governed by the ordinary DP, not by
 `--polytomy-mode`.
 
 Soft mode is the default because a multifurcation in an inferred tree is usually
@@ -289,23 +299,27 @@ cost-optimal partition for each backtracked *k*.
 
 ## Outlier handling
 
-Small clusters are unavoidable in real phylogenies: isolated taxa on long
-branches, contaminant sequences, biological noise. Two mechanisms handle them.
+Small clusters may contain isolated taxa, rare lineages, or noisy observations.
+A size threshold identifies small clusters; it does not establish their cause.
 
 - **Hard constraint** (`min_cluster_size`). The DP enforces a minimum cluster
   size during optimisation. A *k* that cannot be reached without violating it is
   not returned at all.
-- **Soft marking** (`outlier_size_threshold` with `prefer_fewer_outliers`).
-  Clusters below the threshold are marked with ID `-1` in the output but still
-  exist. `prefer_fewer_outliers` biases toward solutions that concentrate noise
-  into fewer groups rather than scattering it.
+- **Export marking** (`outlier_size_threshold`). Clusters below the threshold
+  are marked with ID `-1` in the exported table. Without a threshold, the
+  default export marks singleton clusters. Returned partitions keep their IDs.
+- **DP preference** (`prefer_fewer_outliers`). Minimise the number of small
+  clusters before partition cost.
 
 `prefer_fewer_outliers` acts **inside the dynamic program**, not on peak
 ranking. It changes how two candidate DP states are compared: normally cost is
 minimised first and outlier count only breaks ties, whereas with the flag set the
 outlier count is minimised first and cost becomes the tie-breaker. The effect is
-therefore on which partition is chosen for a given *k*, not on which *k* is
-selected. It requires `outlier_size_threshold` to be set, and raises without it.
+on which partition is chosen for a given *k*. This can also change the score
+curve and selected peaks. Without a size threshold it counts singleton
+clusters; an explicit threshold changes which sizes count.
+
+To change only peak order, use `partition_preference` in `PeakConfig` instead.
 
 ## Zero-length edges
 

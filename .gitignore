@@ -54,7 +54,3 @@ UNKNOWN.egg-info/
 /figs_supp/
 /manuscript_check/
 /review_artifacts/
-/clonetrac/*
-!/clonetrac/run_analysis.py
-!/clonetrac/compare_runs.py
-!/clonetrac/README.md

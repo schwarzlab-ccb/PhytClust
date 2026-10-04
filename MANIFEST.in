@@ -1,19 +1,12 @@
+# Include package code and public release documents only.
+global-exclude *
+graft src/phytclust
+include pyproject.toml
 include LICENSE
 include README.md
 include CHANGELOG.md
-recursive-include src/phytclust/gui/static *
-recursive-include src/phytclust/gui/templates *
+include CITATION.cff
 
-prune site
 global-exclude .ipynb_checkpoints
 global-exclude *.pyc
 global-exclude __pycache__
-
-# Keep local analysis data and generated outputs out of release archives.
-prune clonetrac
-prune avian_peaks
-prune figs_supp
-prune manuscript_check
-prune review_artifacts
-prune results
-prune tests

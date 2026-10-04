@@ -17,16 +17,16 @@ phytclust gui [options]      # launch the web GUI
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-k, --k` | — | Exactly this many clusters (≥ 1) |
+| `-k, --k` |: | Exactly this many clusters (≥ 1) |
 | `--top-n` | `1` | Number of peaks taken from the global score curve |
 | `--resolution` | off | One peak per log bin |
-| `--max-k` | — | Upper bound on *k*; defaults to `ceil(max_k_limit · n_leaves)` |
-| `--outgroup` | — | Outgroup to drop before clustering |
-| `--root-taxon` | — | Re-root on this taxon, or `midpoint` |
+| `--max-k` |: | Upper bound on *k*; defaults to `ceil(max_k_limit · n_leaves)` |
+| `--outgroup` |: | Outgroup to drop before clustering |
+| `--root-taxon` |: | Re-root on this taxon, or `midpoint` |
 | `-o, --out-dir` | `results/` | Output directory |
 | `--save-fig` | off | Write score and tree PNGs |
 | `--tsv-name` | `phytclust_results.tsv` | Output table |
-| `--config` | — | YAML/JSON config file |
+| `--config` |: | YAML/JSON config file |
 | `--plot` | off | Open interactive plot windows (blocks until they are closed) |
 
 ### Other flags
@@ -36,15 +36,17 @@ phytclust gui [options]      # launch the web GUI
 | `--bins` | `3` | Bins for `--resolution` |
 | `--max-k-limit` | `0.9` | *k* ceiling as a fraction of `n_leaves` |
 | `--prominence-weight` | `0.7` | Peak-rank blend: 1 = rank by prominence, 0 = by score height |
+| `--peak-partition-preference` | `none` | Rank detected peaks using `none`, `fewer_outliers`, or `balanced` |
+| `--peak-partition-weight` | `0.5` | Blend peak strength with partition quality; `1` uses partition quality alone |
 | `--exclude-k2` | off | Drop *k* = 2 from automatic selection (`--include-k2` is accepted but deprecated; *k* = 2 is a candidate by default) |
 | `--min-cluster-size` | `1` | Hard minimum cluster size |
-| `--outlier-size-threshold` | — | Clusters below this size are marked `-1` |
-| `--prefer-fewer-outliers` | off | Make the DP minimise outlier count before cost (needs `--outlier-size-threshold`) |
+| `--outlier-size-threshold` |: | Clusters below this size are marked `-1` |
+| `--prefer-fewer-outliers` | off | Make the DP minimise outlier count before cost; counts singletons when no threshold is supplied |
 | `--polytomy-mode` | `soft` | `soft` = any group of a multifurcation's children may form a cluster; `hard` = each child goes wholly into one cluster |
 | `--soft-polytomy-max-degree` | `12` | Soft mode raises at nodes above this degree; use `hard` for them |
 | `--no-split-zero-length` | off | Forbid splitting zero-length edges |
-| `--save-tree` `--save-all-k` `--no-tsv` `--dpi` | — | Tree-only PNGs · every *k* · skip TSV · PNG dpi (`150`) |
-| `-v` `-q` `--time` `--progress` `--no-color` `--version` | — | Verbosity · timing · spinner · colour · version |
+| `--save-tree` `--save-all-k` `--no-tsv` `--dpi` |: | Tree-only PNGs · every *k* · skip TSV · PNG dpi (`150`) |
+| `-v` `-q` `--time` `--progress` `--no-color` `--version` |: | Verbosity · timing · spinner · colour · version |
 
 CLI flags override config-file values.
 
@@ -82,6 +84,8 @@ runtime:
 |-------|---------|---------|
 | `prominence_weight` | `0.7` | Blend when `ranking_mode="adjusted"`: `1` ranks by prominence only, `0` by score height only |
 | `ranking_mode` | `"adjusted"` | `"adjusted"` min–max normalises prominence and score, then blends them by `prominence_weight`; `"raw"` ranks by absolute prominence alone and ignores it |
+| `partition_preference` | `"none"` | Keep existing ranking, prefer fewer singleton cells (`"fewer_outliers"`), or also prefer even cluster sizes (`"balanced"`) |
+| `partition_weight` | `0.5` | Weight from 0 to 1; `0` keeps existing ranking, `1` uses partition quality alone. Ignored for `"none"` |
 | `min_prominence` | `None` | Minimum peak prominence; `None` derives it from the score range |
 | `exclude_k2` | `False` | Drop *k* = 2 from automatic selection ([details](../concepts.md#k-2-and-the-boundary-test)). An explicit `k=2` is always honoured |
 | `min_k` | `2` | Ignore peaks below this *k* |
@@ -114,9 +118,10 @@ Any other value raises `ConfigurationError`. `ranking_mode` likewise accepts onl
 | `show_branch_lengths` | `False` | Label branch lengths |
 | `hide_internal_nodes` | `True` | Hide internal labels |
 
-`ScorePlotConfig`: `fig_width` / `fig_height` (`18` / `10`), `log_scale_y` (`True`),
+`ScorePlotConfig`: `fig_width` / `fig_height` (`9` / `5`), `log_scale_y` (`True`),
 `x_axis_mode` (`"log"`), `clamp_negative_to_zero` (`True`), `colorblind_palette`,
-and font sizes (title `50`, axis `35`, tick `30`, peak `50`, bin `30`).
+and font sizes (title `20`, axis `18`, tick `14`, peak `16`, bin `14`).
+The default title font is Liberation Sans.
 
 `SaveConfig`: `tsv_name` (`"phytclust_results.tsv"`), `outlier` (`True` marks
 outlier clusters `-1`).
@@ -146,22 +151,23 @@ pc = PhytClust(
 
 ### Large trees
 
-The DP accumulates in float64. On trees large enough that the DP frontier is
-the binding memory constraint, `dp_float32=True` halves that footprint.
+The DP uses float64 by default. `dp_float32=True` halves the storage used by
+floating-point DP tables, but reduces precision and may change selected peaks.
+Use it when memory is limiting, and compare with float64 on a smaller tree
+when possible.
 
-It costs score precision, and not uniformly: the score forms
-`(β(1) − β(k)) / β(k)`, a difference of large near-equal sums, so float32's
-shorter mantissa is most damaging at large *k* on trees with a large total
-dispersion — exactly the trees you would enable it for. Selected *k* can shift.
-Reach for it when the DP will not otherwise fit in memory, not as a general
-speed-up, and check that the peaks it returns match a float64 run on a subtree
-where that is affordable.
-
-Two other knobs matter at scale: `max_k` (or `max_k_limit`) bounds the DP
+Two other settings affect memory use: `max_k` (or `max_k_limit`) bounds the DP
 directly, and `preserve_dp_tables=False` (the default) frees each child's table
 as soon as its parent is computed.
 
-Outlier settings go through `OutlierConfig(size_threshold=3, prefer_fewer=True)`.
+Outlier settings go through `OutlierConfig`. With `prefer_fewer=True` and no
+threshold, singleton clusters count as outliers. For example,
+`OutlierConfig(size_threshold=3, prefer_fewer=True)` counts clusters of one or
+two leaves instead.
+
+Peak partition preferences only reorder detected candidates; they leave the DP
+objective and score curve unchanged. Their singleton counts do not depend on
+`OutlierConfig.size_threshold`.
 
 ### `run()` → dict
 
@@ -174,7 +180,7 @@ The mode is inferred from the arguments:
 ```python
 pc.run(k=5)                              # exact k
 pc.run(top_n=3, max_k=120)               # global; top-n peaks
-pc.run(by_resolution=True, num_bins=4)   # resolution; one peak per bin
+pc.run(by_resolution=True, num_bins=4)   # peak from each bin containing one
 ```
 
 `run()` also accepts `peak_config=`, which overrides the `PeakConfig` given to
@@ -187,13 +193,15 @@ exact-*k* mode where the list has length one. `scores` is `None` in exact-*k* mo
 ### Other methods
 
 ```python
-pc.get_clusters(k=7)   # {Clade: id} — keyed by Bio.Phylo leaf objects; use clade.name
+pc.get_clusters(k=7)   # {Clade: id}: keyed by Bio.Phylo leaf objects; use clade.name
 pc.plot(results_dir="results/", save=True, dpi=150)
 pc.save(results_dir="results/", filename="phytclust_results.tsv")
 ```
 
-`run()` and `get_clusters()` key their cluster maps differently: `run()` returns
-leaf names, `get_clusters()` returns `Bio.Phylo` clade objects.
+Both `run()` and `get_clusters()` return cluster maps keyed by `Bio.Phylo`
+leaf objects. Use `leaf.name` to retrieve each label. Returned maps retain
+cluster IDs; saving with `outlier=True` marks small clusters as `-1` in the
+exported table. With no threshold, export marking applies to singletons.
 
 ### Plotting functions
 
@@ -203,7 +211,7 @@ full keyword set, documented on the
 
 ```python
 from phytclust.viz.cluster import plot_clusters, plot_multiple_k
-from phytclust.viz.draw import plot_cluster
+from phytclust.viz.plots import plot_cluster
 
 plot_clusters(pc, k=3, save=True, results_dir="figures")
 plot_multiple_k(pc, k_values=[3, 5, 8], results_dir="figures", save=True)

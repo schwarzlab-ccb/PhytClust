@@ -1,7 +1,6 @@
 # Visualisation
 
-PhytClust has a few plotting features alongside the algorithm. It is
-matplotlib-based, writes PNG, SVG, and PDFs. For interactive
+PhytClust draws cluster trees with Matplotlib and saves PNG, SVG, or PDF files. For interactive
 exploration and customized trees, use the [web GUI](getting-started.md#web-gui-experimental).
 
 Every example here was generated from the bundled
@@ -9,11 +8,9 @@ Every example here was generated from the bundled
 at *k* = 3 via `plot_clusters(pc, k=3, ...)`. All options below are keyword
 arguments to `plot_clusters`, or to `plot_cluster` directly.
 
-This page is the reference for the plotting options. `pc.plot()` in the
-[Python API reference](reference/index.md#python-api) is the convenience
-wrapper; the `phytclust.viz` functions — `plot_clusters`, `plot_cluster` and
-`plot_multiple_k` — take the full keyword set, and it is documented here. The
-reference lists their signatures and links back to this page.
+This page describes the plotting options for `plot_clusters`, `plot_cluster`,
+and `plot_multiple_k`. `pc.plot()` provides a shorter way to plot the selected
+partitions; see the [Python API reference](reference/index.md#python-api).
 
 ---
 
@@ -32,11 +29,10 @@ plot_clusters(pc, k=3, save=True, results_dir="figures")
 
 ![Baseline cluster plot](img/01_baseline.png)
 
-`k` here need not be one of the *k* values the run selected. `plot_clusters`
-backtracks the requested *k* out of the DP table, so any *k* from 1 up to `max_k`
-can be plotted once a run has populated it — `pc.run()` above uses global mode
-with `top_n=1` and probably did not pick *k* = 3, which is fine. Asking for a *k*
-beyond `max_k`, or before any run, raises.
+`k` need not be one of the values selected by peak detection. With an explicit
+`k`, `plot_clusters` prepares or extends the DP tables as needed, then retrieves
+that partition. It can also be called before `pc.run()`. Impossible partitions
+raise an error.
 
 ## Side bars
 
@@ -154,15 +150,19 @@ resolves from the `RuntimeConfig` on the `PhytClust` object, so the CLI,
 `pc.plot()` and `plot_clusters()` all agree:
 
 ```python
+from phytclust import RuntimeConfig, PlotConfig, ClusterPlotConfig
+
 cfg = RuntimeConfig(plot=PlotConfig(cluster=ClusterPlotConfig(height_scale=0.8)))
 pc = PhytClust(tree, runtime_config=cfg)
 
+pc.run(k=3)
 pc.plot(save=True)                     # height_scale=0.8, from the config
-pc.plot(save=True, height_scale=0.5)   # 0.5 — an explicit argument wins
+pc.plot(save=True, height_scale=0.5)   # 0.5: an explicit argument wins
 ```
 
 Precedence is **explicit argument → `ClusterPlotConfig` → built-in default**.
 `ScorePlotConfig` resolves the same way for the score plot.
 
-Outlier clusters carry cluster ID **`-1`**, the same convention used in the
-output table and everywhere else in the docs.
+Exported tables mark outlier clusters with ID **`-1`** by default. Returned
+partitions keep their original IDs. When plotting a supplied map, use `-1`
+to draw those leaves with outlier styling.

@@ -31,14 +31,15 @@ phytclust examples/sample_tree.nwk --k 5 --save-fig --out-dir results/quickstart
 
 `results/quickstart/` then contains:
 
-- `phytclust_results.tsv` — which leaf is in which cluster
-- `tree_k5.png` — the tree coloured by cluster, one colour per clade
-- `scores.png` — the score-versus-*k* curve
+- `phytclust_results.tsv`: which leaf is in which cluster
+- `tree_k5.png`: the tree coloured by cluster, one colour per clade
+
+Automatic selection also saves `scores.png` when `--save-fig` is enabled.
 
 ## When *k* is unknown
 
-`--top-n 3` returns the best few *k* values; `--resolution` returns one *k* per
-scale. The [CLI tutorial](tutorials/cli-end-to-end.md) covers both.
+`--top-n 3` returns up to three ranked peaks. `--resolution` selects a peak
+from each bin that contains one. The [CLI tutorial](tutorials/cli-end-to-end.md) covers both.
 
 ## Rooting
 

@@ -11,7 +11,7 @@ anywhere `sample_tree.nwk` appears.
 
 ## 1. Exact-*k* clustering
 
-Pass `--k` when the number of groups is fixed in advance — by prior biology, or
+Pass `--k` when the number of groups is fixed in advance: by prior biology, or
 by a downstream tool that expects a set number of clusters.
 
 ```bash
@@ -20,9 +20,10 @@ phytclust examples/sample_tree.nwk --k 5 --save-fig --out-dir results/cli_baseli
 
 The output directory then contains:
 
-- **`phytclust_results.tsv`** — one row per leaf with its cluster assignment
-- **`tree_k5.png`** — the tree, coloured by cluster
-- **`scores.png`** — the score curve across all *k*
+- **`phytclust_results.tsv`**: one row per leaf with its cluster assignment
+- **`tree_k5.png`**: the tree, coloured by cluster
+
+An exact-*k* run does not calculate or save a score curve.
 
 ## 2. Global peak search
 
@@ -39,11 +40,11 @@ phytclust examples/sample_tree.nwk \
 
 Three files carry the result:
 
-- **`peaks_by_rank.txt`** — the selected *k* values ordered by prominence
-- **`scores.png`** — the curve the peaks were taken from. Widely separated peaks
+- **`peaks_by_rank.txt`**: the selected *k* values in rank order
+- **`scores.png`**: the curve the peaks were taken from. Widely separated peaks
   indicate distinct structural scales in the tree; adjacent peaks usually mean
   one scale with an uncertain boundary
-- **`phytclust_results.tsv`** — assignments for every selected *k*, side by side
+- **`phytclust_results.tsv`**: assignments for every selected *k*, side by side
 
 Without `--max-k`, the scan runs up to 90% of the leaf count. On large trees,
 setting it explicitly to a plausible range is faster.
@@ -61,7 +62,9 @@ phytclust examples/sample_tree.nwk \
   --out-dir results/cli_resolution
 ```
 
-This returns four solutions spread from broad to fine-grained.
+This returns up to four solutions, one per bin containing a detected peak.
+Set `resolution_fallback_mode="max_score"` in `PeakConfig` or the config file
+to select a value from bins without peaks.
 
 ## 4. Constraining cluster size
 
@@ -82,8 +85,9 @@ the results at all.
 
 ### Outlier marking
 
-The alternative is to let small clusters exist and mark them, optionally biasing
-the ranking toward solutions that produce fewer of them:
+Small clusters can remain in the partition and be marked in the exported
+table. `--prefer-fewer-outliers` changes the DP objective to minimise their
+count before cost:
 
 ```bash
 phytclust examples/sample_tree.nwk \
@@ -93,7 +97,18 @@ phytclust examples/sample_tree.nwk \
   --out-dir results/cli_outlier
 ```
 
-Outlier clusters are written as `-1` in the output TSV.
+Outlier clusters are written as `-1` in the output TSV. Without a size
+threshold, `--prefer-fewer-outliers` counts singleton clusters.
+
+To change peak order while keeping the DP objective and score curve unchanged:
+
+```bash
+phytclust examples/sample_tree.nwk --top-n 3 \
+  --peak-partition-preference balanced --peak-partition-weight 1.0
+```
+
+This ranks detected peaks by cluster-size balance and avoidance of singletons.
+It does not create new peak candidates.
 
 ## 5. Polytomies and zero-length edges
 
@@ -108,9 +123,9 @@ phytclust examples/sample_polytomy.newick --k 5
 
 Two polytomy modes are available:
 
-- **`soft`** (default) — the multifurcation is treated as unresolved
+- **`soft`** (default): the multifurcation is treated as unresolved
   zero-length branching, so any group of two or more children may form a cluster
-- **`hard`** — each child of a polytomy goes entirely into one cluster, unless
+- **`hard`**: each child of a polytomy goes entirely into one cluster, unless
   all of them form one cluster together
 
 ```bash
@@ -118,7 +133,7 @@ phytclust tree.nwk --k 5 --polytomy-mode hard
 ```
 
 Soft mode is exponential in node degree. `--soft-polytomy-max-degree`
-(default 12) is a guardrail: a polytomy above that degree stops the run with an
+(default 12) limits the node degree: a polytomy above it stops the run with an
 error. Use `--polytomy-mode hard` for such trees, or raise the limit
 deliberately.
 
@@ -173,7 +188,7 @@ CLI flags override config-file values, so the file can serve as a baseline that
 individual runs adjust.
 
 The curve referred to in sections 2 and 3, and plotted in `scores.png`, is the
-product of a Calinski-Harabasz-style validity score and an elbow score, evaluated
+product of the clustering validity index and an elbow score, evaluated
 at every *k*. Both terms, and the reasons the criterion departs from textbook CH,
 are defined in
 [the score curve and choosing *k*](../concepts.md#the-score-curve-and-choosing-k).

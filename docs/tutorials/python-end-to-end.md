@@ -27,7 +27,7 @@ pc = PhytClust(
 ```
 
 Outlier settings are passed as an `OutlierConfig`, as above. The constructor has
-no `outlier_size_threshold=` or `prefer_fewer_outliers=` parameters — those names
+no `outlier_size_threshold=` or `prefer_fewer_outliers=` parameters: those names
 exist only as the CLI flags `--outlier-size-threshold` and
 `--prefer-fewer-outliers`, which the CLI routes into `OutlierConfig` for you.
 
@@ -40,7 +40,7 @@ result = pc.run(k=5)
 
 print(result["mode"])        # "k"
 print(result["selected_k"])  # 5
-print(result["clusters"][0]) # leaf name -> cluster id, for k = 5
+print(result["clusters"][0]) # Bio.Phylo leaf object -> cluster ID, for k = 5
 ```
 
 `clusters` is always a list of leaf-to-cluster-ID maps, one per selected *k*. In
@@ -49,28 +49,28 @@ exact-*k* mode the list holds a single entry. `scores` is `None` in this mode.
 ## 3. Global peak search
 
 When *k* is not known in advance, the global search scores every *k* up to
-`max_k` and returns the most prominent peaks:
+`max_k` and returns up to `top_n` peaks in rank order:
 
 ```python
 result = pc.run(top_n=3, max_k=120)
 
 print(result["mode"])           # "global"
 print(result["k_values"])       # e.g. [7, 23, 45], ranked
-print(len(result["clusters"]))  # 3 — one cluster map per selected k
+print(len(result["clusters"]))  # up to 3, one map per selected k
 ```
 
 `result["scores"]` holds the score vector for plotting or further analysis.
-`result["k_values"]` is ordered by rank, strongest first.
+`result["k_values"]` is ordered by the configured ranking metric.
 
 ## 4. Multi-resolution mode
 
-One representative *k* per logarithmic bin, giving a coarse-to-fine view:
+Select a peak from each logarithmic bin that contains one:
 
 ```python
 result = pc.run(by_resolution=True, num_bins=4, max_k=120)
 
 print(result["mode"])      # "resolution"
-print(result["k_values"])  # one k per bin, e.g. [3, 12, 38, 95]
+print(result["k_values"])  # up to four values, e.g. [3, 12, 38, 95]
 ```
 
 ## 5. Tuning peak selection
@@ -97,26 +97,17 @@ print(result["k_values"])
 `resolution_fallback_mode` applies only in resolution mode; it has no effect on
 the global search shown here.
 
-<!-- TODO(kat): MANUSCRIPT CONFLICT — unresolved, needs your call.
-     The parameter is now `prominence_weight`, and the docs here, in
-     reference/index.md and in concepts.md all now match the code:
+To rank detected peaks by balanced cluster sizes without changing the DP
+objective or scores:
 
-         base_metric = w * norm(prominence) + (1 - w) * norm(score_height)
+```python
+peak_cfg = PeakConfig(partition_preference="balanced", partition_weight=1.0)
+result = pc.run(top_n=3, peak_config=peak_cfg)
+```
 
-     so the default w=0.7 weights PROMINENCE at 0.7 and height at 0.3. There is
-     no outlier term in the ranking path at all; the "raw vs outlier-adjusted"
-     wording that used to be in the other two files was simply wrong.
-
-     But Eq. 13 of the manuscript reportedly defines the blend the other way up
-     — height against prominence, with 0.7 favouring HEIGHT. That is the exact
-     opposite weighting. One of the two is wrong, and the code cannot settle it:
-       - if the manuscript is right, the code's two terms are swapped and the
-         published default has never matched the implementation;
-       - if the code is right, Eq. 13 and any figure generated from it need
-         correcting before the tag.
-     Resolve against the manuscript, not against this file.
-
-     This is the only unresolved TODO left in docs/. -->
+`partition_weight=1.0` uses partition quality alone. Lower weights blend it
+with peak strength. Balanced quality rewards even cluster sizes and penalises
+singleton cells, independently of the outlier size threshold.
 
 ## 6. Plot and output settings
 
@@ -150,8 +141,8 @@ pc.save(results_dir="results/python", filename="phytclust_results.tsv")
 ```
 
 To retrieve a single partition without re-running, use `pc.get_clusters(k=7)`.
-Note that it keys its map by `Bio.Phylo` clade objects rather than by leaf name;
-use `clade.name` to get the label.
+Both this method and `run()` return maps keyed by `Bio.Phylo` leaf objects.
+Use `leaf.name` to retrieve each label.
 
 ## 7. Comparing several *k*
 
@@ -227,12 +218,17 @@ for k, clusters in zip(result["k_values"], result["clusters"]):
     print(f"k={k}: {len(set(clusters.values()))} clusters")
 
     df = pd.DataFrame([
-        {"leaf": leaf, "cluster": cid}
+        {"leaf": leaf.name, "cluster": cid}
         for leaf, cid in clusters.items()
     ])
 
-    # outlier clusters carry ID -1
-    real_clusters = df[df["cluster"] != -1]
-    outliers = df[df["cluster"] == -1]
-    print(f"  {len(real_clusters)} leaves clustered, {len(outliers)} outliers")
+    threshold = pc.outlier.size_threshold
+    if threshold is None:
+        threshold = 2  # singleton marking used by the default export
+    sizes = df.groupby("cluster")["leaf"].transform("size")
+    outlier_leaves = df[sizes < threshold]
+    print(f"  {len(outlier_leaves)} leaves in clusters below size {threshold}")
 ```
+
+Returned partitions retain their cluster IDs. `pc.save(outlier=True)` marks
+small clusters as `-1` in the exported table without changing those maps.

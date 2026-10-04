@@ -8,8 +8,9 @@ Clustering for rooted phylogenetic trees.
 
 PhytClust groups the tips of a rooted tree into monophyletic clusters using
 dynamic programming that minimises the summed distance from each tip in a cluster
-to that cluster's most recent common ancestor (MRCA). For a fixed number of
-clusters the result is the exact global optimum, not a heuristic.
+to that cluster's most recent common ancestor (MRCA). With the default objective,
+it finds the partition with the lowest total leaf-to-MRCA distance for the
+requested number of clusters.
 
 It runs as a command-line tool, a Python API, and an experimental web interface.
 
@@ -33,23 +34,36 @@ pip install -e ".[dev]"
 
 ## Usage
 
+Use your own Newick file in place of `tree.nwk`. The examples under
+`examples/` are available in the source repository.
+
 ```bash
 # cluster a tree into exactly 5 clades
-phytclust examples/sample_tree.nwk --k 5 --save-fig
+phytclust tree.nwk --k 5 --save-fig
 
-# let PhytClust choose the 3 best values of k
-phytclust examples/sample_tree.nwk --top-n 3 --save-fig
+# return up to 3 ranked peaks from the score curve
+phytclust tree.nwk --top-n 3 --save-fig
 
-# one k per resolution scale
-phytclust examples/sample_tree.nwk --resolution --bins 4 --save-fig
+# select a peak from each resolution bin that contains one
+phytclust tree.nwk --resolution --bins 4 --save-fig
 ```
+
+To rank detected peaks by balanced cluster sizes:
+
+```bash
+phytclust tree.nwk --top-n 3 \
+  --peak-partition-preference balanced \
+  --peak-partition-weight 1.0 --save-fig
+```
+
+This changes peak order without changing the score curve or DP objective.
 
 From Python:
 
 ```python
 from phytclust import PhytClust
 
-pc = PhytClust("examples/sample_tree.nwk")
+pc = PhytClust("tree.nwk")
 result = pc.run(k=5)
 ```
 
@@ -102,4 +116,4 @@ and, to cite a specific version of the software, the Zenodo record:
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE).
