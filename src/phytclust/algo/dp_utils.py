@@ -44,10 +44,7 @@ def validate_args(pc) -> None:
             "outlier.ratio_mode must be one of: 'exp', 'inverse', 'power'"
         )
 
-    if pc.outlier.prefer_fewer and pc.outlier.size_threshold is None:
-        raise ConfigurationError(
-            "outlier.prefer_fewer=True requires outlier.size_threshold to be set."
-        )
+
 
     polytomy_mode = getattr(pc, "polytomy_mode", "hard")
     if polytomy_mode not in {"hard", "soft"}:

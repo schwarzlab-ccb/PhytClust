@@ -7,6 +7,7 @@ import pandas as pd
 from Bio.Phylo.BaseTree import Tree, Clade
 
 from ..exceptions import InvalidTreeError, ConfigurationError
+from .traversal import iter_clades, terminals, nonterminals
 
 
 def get_pairwise_distances(
@@ -16,23 +17,29 @@ def get_pairwise_distances(
     mrca: Optional[str] = None,
 ) -> Union[np.ndarray, pd.DataFrame]:
     """
-    Pairwise distances for a subset of nodes.
-    mode ∈ {"terminals","nonterminals","all"}.
-    If mrca is given, restrict to descendants of that named clade.
+    Return a symmetric matrix of branch-length distances between selected nodes.
+
+    ``mode`` selects leaves, internal nodes, or both (leaves first).
+    If ``mrca`` is supplied, select nodes from that subtree, including its
+    root when selecting internal nodes. The name must match exactly one node.
+    DataFrame labels use node names, with generated labels for unnamed nodes.
     """
-    if mrca:
-        clade = next((cl for cl in tree.find_clades(name=mrca)), None)
-        if clade is None:
-            raise InvalidTreeError(f"No node found with name {mrca}")
-        terms = list(clade.get_terminals())
-    elif mode == "terminals":
-        terms = list(tree.get_terminals())
-    elif mode == "nonterminals":
-        terms = list(tree.get_nonterminals())
-    elif mode == "all":
-        terms = list(tree.get_terminals()) + list(tree.get_nonterminals())
-    else:
+    if mode not in {"terminals", "nonterminals", "all"}:
         raise ConfigurationError("mode must be one of {'terminals','nonterminals','all'}")
+    clade = tree.root
+    if mrca is not None:
+        matches = [node for node in iter_clades(tree.root) if node.name == mrca]
+        if not matches:
+            raise InvalidTreeError(f"No node found with name {mrca}")
+        if len(matches) != 1:
+            raise InvalidTreeError(f"Node name {mrca!r} is ambiguous ({len(matches)} matches).")
+        clade = matches[0]
+    if mode == "terminals":
+        terms = list(terminals(clade))
+    elif mode == "nonterminals":
+        terms = list(nonterminals(clade))
+    else:
+        terms = list(terminals(clade)) + list(nonterminals(clade))
 
     n = len(terms)
     dist = np.zeros((n, n), dtype=float)
@@ -44,20 +51,34 @@ def get_pairwise_distances(
         dist[j, i] = bl
 
     if as_dataframe:
-        names = [getattr(t, "name", f"node_{i}") for i, t in enumerate(terms)]
+        used_names = {t.name for t in terms if t.name is not None}
+        names = []
+        for i, node in enumerate(terms):
+            name = node.name
+            if name is None:
+                name = f"node_{i}"
+                while name in used_names:
+                    name += "_"
+                used_names.add(name)
+            names.append(name)
         return pd.DataFrame(dist, index=names, columns=names)
     return dist
 
 
 def get_parent(tree: Tree, child: Clade) -> Optional[Clade]:
+    """Return the child's parent, or None for the root or a node outside the tree."""
     path = tree.get_path(child)
-    return path[-2] if len(path) > 1 else None
+    if not path:
+        return None
+    return path[-2] if len(path) > 1 else tree.root
 
 
 def count_branches_in_clusters(clusters: dict) -> int:
-    """
-    clusters: {cluster_id: [clades]}
-    Total branches ~ 2*N-2 per cluster with N>1.
+    """Estimate branch counts assuming each cluster is a rooted binary tree.
+
+    ``clusters`` maps cluster IDs to lists of leaves. Count ``2N - 2``
+    branches for each cluster with N > 1 leaves; smaller clusters add zero.
+    The estimate assumes two children per internal node.
     """
     branch_count = 0
     for clades in clusters.values():
@@ -68,11 +89,17 @@ def count_branches_in_clusters(clusters: dict) -> int:
 
 
 def find_all_min_indices(arr: List[float]) -> Tuple[List[int], float]:
-    if not arr:
+    """Return all indices equal to the minimum and the minimum value.
+
+    Return ``([], inf)`` for empty input. Reject NaN values.
+    """
+    if len(arr) == 0:
         return [], float("inf")
     min_value = float("inf")
     min_indices: List[int] = []
     for i, value in enumerate(arr):
+        if np.isnan(value):
+            raise ValueError("Minimum values must not contain NaN.")
         if value < min_value:
             min_value = value
             min_indices = [i]
@@ -83,16 +110,15 @@ def find_all_min_indices(arr: List[float]) -> Tuple[List[int], float]:
 
 def rename_internal_nodes(tree: Tree) -> None:
     """
-    Rename every internal node to 'internal_X' with a running counter.
+    Rename internal nodes in place to ``internal_1``, ``internal_2``, etc.
 
-    Notes
-    -----
-    This is a generic helper for ad hoc renaming and is NOT part of the
-    main PhytClust preprocessing / DP pipeline. The official renaming
-    used during clustering is in ``phytclust.validation.rename_nodes``.
+    Skip labels already used by leaves.
     """
     internal_node_count = 1
-    for clade in tree.find_clades():
-        if not clade.is_terminal():
-            clade.name = f"internal_{internal_node_count}"
+    used_names = {node.name for node in terminals(tree.root)}
+    for clade in nonterminals(tree.root):
+        while f"internal_{internal_node_count}" in used_names:
             internal_node_count += 1
+        clade.name = f"internal_{internal_node_count}"
+        used_names.add(clade.name)
+        internal_node_count += 1

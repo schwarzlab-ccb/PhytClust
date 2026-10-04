@@ -135,7 +135,7 @@ def compute_dp_table(clustering) -> None:
     if min_cluster_size < 1:
         raise ConfigurationError("min_cluster_size must be ≥ 1.")
 
-    outlier_size_threshold = clustering.outlier.size_threshold
+    outlier_size_threshold = clustering.outlier.counting_threshold
     outlier_detection_enabled = outlier_size_threshold is not None
     prioritize_fewer_outliers = clustering.outlier.prefer_fewer
     preserve_dp_tables = bool(

@@ -1,7 +1,4 @@
-/* ============================================================
-   PhytClust – colors.js
-   Color palette, generation, and theme helpers.
-   ============================================================ */
+// Cluster palettes and display themes.
 
 import { state } from "./state.js";
 
@@ -25,51 +22,80 @@ export const BASE_COLORS = [
   "#3f648a", // steel blue
 ];
 
-export function shuffle(arr) {
-  let a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+/** Return a shuffled copy of the colours. */
+export function shuffle(colors) {
+  const shuffled = colors.slice();
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const otherIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[otherIndex]] = [shuffled[otherIndex], shuffled[index]];
   }
-  return a;
+  return shuffled;
 }
 
-export function adjustLight(hex, fraction) {
-  const value = parseInt(hex.slice(1), 16);
-  const blend = (channel) => channel + (255 - channel) * fraction;
-  return `rgb(${blend(value >> 16)}, ${blend((value >> 8) & 0xff)}, ${blend(value & 0xff)})`;
+function readColor(color) {
+  const parsed = typeof color === "string" ? d3.color(color) : null;
+  if (!parsed) throw new Error(`Invalid colour: ${color}`);
+  const rgb = parsed.rgb();
+  // D3 represents transparent channels as NaN.
+  if (rgb.opacity === 0) {
+    for (const channel of ["r", "g", "b"]) {
+      if (Number.isNaN(rgb[channel])) rgb[channel] = 0;
+    }
+  }
+  if (![rgb.r, rgb.g, rgb.b, rgb.opacity].every(Number.isFinite)) {
+    throw new Error(`Invalid colour: ${color}`);
+  }
+  return rgb;
 }
 
+function checkFraction(value, name) {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`${name} must be a number from 0 to 1.`);
+  }
+}
+
+function lightenedColor(rgb, fraction, opacity = rgb.opacity) {
+  const channels = [rgb.r, rgb.g, rgb.b].map(channel => channel + (255 - channel) * fraction);
+  return d3.rgb(...channels, opacity).formatRgb();
+}
+
+/** Blend a CSS colour toward white, preserving its opacity. */
+export function adjustLight(color, fraction) {
+  checkFraction(fraction, "Lightening fraction");
+  return lightenedColor(readColor(color), fraction);
+}
+
+/** Set a CSS colour's opacity without changing its RGB channels. */
 export function withAlpha(color, alpha) {
-  if (color.startsWith("rgb"))
-    return color.replace("rgb", "rgba").replace(")", `, ${alpha})`);
-  const num = parseInt(color.slice(1), 16);
-  return `rgba(${num >> 16}, ${(num >> 8) & 0xff}, ${num & 0xff}, ${alpha})`;
+  checkFraction(alpha, "Opacity");
+  const rgb = readColor(color);
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
-export function generateClusterColors(nClusters) {
-  if (!Number.isInteger(nClusters) || nClusters < 0) {
-    throw new RangeError("Colour count must be an integer zero or greater.");
+/** Expand the base palette with progressively lighter colours. */
+export function generateClusterColors(clusterCount) {
+  if (!Number.isSafeInteger(clusterCount) || clusterCount < 0) {
+    throw new RangeError("Colour count must be a safe integer zero or greater.");
   }
-  let palette = BASE_COLORS.slice();
-  if (nClusters > palette.length * 7) {
-    console.warn(`Colours repeat beyond ${palette.length * 7} entries. Use cluster labels for larger partitions.`);
+  if (clusterCount === 0) return [];
+  if (!BASE_COLORS.length) throw new Error("The cluster palette is empty.");
+  const baseColors = BASE_COLORS.map(readColor);
+  if (clusterCount > baseColors.length * 7) {
+    console.warn(`Colours repeat beyond ${baseColors.length * 7} entries. Use cluster labels for larger partitions.`);
   }
-  if (nClusters <= palette.length) return palette.slice(0, nClusters);
-  let colors = [];
-  const minAlpha = 0.58;
-  const alphaStep = 0.12;
-  const lightStep = 0.14;
-  const repeats = Math.ceil(nClusters / palette.length);
-  for (let r = 0; r < repeats; r++) {
-    const factor = Math.min(r * lightStep, 0.84);
-    const alpha = Math.max(1 - r * alphaStep, minAlpha);
-    palette.forEach((hex) => {
-      const adjusted = adjustLight(hex, factor);
-      colors.push(alpha < 1 ? withAlpha(adjusted, alpha) : adjusted);
-    });
+  const colors = new Array(clusterCount);
+  for (let index = 0; index < clusterCount; index++) {
+    const baseIndex = index % baseColors.length;
+    const roundIndex = Math.floor(index / baseColors.length);
+    if (roundIndex === 0) {
+      colors[index] = BASE_COLORS[baseIndex];
+      continue;
+    }
+    const fraction = Math.min(roundIndex * 0.14, 0.84);
+    const opacity = baseColors[baseIndex].opacity * Math.max(1 - roundIndex * 0.12, 0.58);
+    colors[index] = lightenedColor(baseColors[baseIndex], fraction, opacity);
   }
-  return colors.slice(0, nClusters);
+  return colors;
 }
 
 export function getThemeColors() {
@@ -91,11 +117,13 @@ export function getThemeColors() {
 const THEME_KEY = "phytclust-theme";
 
 function preferredTheme() {
-  // Only honour an explicit user choice. We deliberately ignore the OS
-  // prefers-color-scheme so a user on a dark-mode system still sees the
-  // intended light look until they opt in via the theme toggle.
-  const stored = localStorage.getItem(THEME_KEY);
-  if (stored === "light" || stored === "dark") return stored;
+  // Start in light mode unless the user saved a different theme.
+  try {
+    const storedTheme = localStorage.getItem(THEME_KEY);
+    if (storedTheme === "light" || storedTheme === "dark") return storedTheme;
+  } catch {
+    console.warn("Could not read the saved theme preference.");
+  }
   return "light";
 }
 
@@ -107,6 +135,10 @@ export function toggleTheme() {
   const current = document.documentElement.getAttribute("data-theme") || "light";
   const next = current === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
-  localStorage.setItem(THEME_KEY, next);
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    console.warn("Could not save the theme preference.");
+  }
   return next;
 }

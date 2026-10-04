@@ -100,30 +100,27 @@ Outlier clusters are written as `-1` in the output TSV.
 ### Polytomies
 
 Internal nodes with more than two children are handled natively by a DP that
-reasons over all children of the node at once. This is the default:
+reasons over all children of the node at once:
 
 ```bash
 phytclust examples/sample_polytomy.newick --k 5
 ```
 
-The legacy path inserts dummy nodes to binarise the tree first:
-
-```bash
-phytclust examples/sample_polytomy.newick --k 5 --no-optimize-polytomies
-```
-
 Two polytomy modes are available:
 
-- **`hard`** (default) — each child of a polytomy goes entirely into one cluster
-- **`soft`** — subsets of children may be merged across cluster boundaries
+- **`soft`** (default) — the multifurcation is treated as unresolved
+  zero-length branching, so any group of two or more children may form a cluster
+- **`hard`** — each child of a polytomy goes entirely into one cluster, unless
+  all of them form one cluster together
 
 ```bash
-phytclust tree.nwk --k 5 --polytomy-mode soft --soft-polytomy-max-degree 15
+phytclust tree.nwk --k 5 --polytomy-mode hard
 ```
 
 Soft mode is exponential in node degree. `--soft-polytomy-max-degree`
-(default 12) is a guardrail: any polytomy above that degree falls back to
-hard mode for that node.
+(default 12) is a guardrail: a polytomy above that degree stops the run with an
+error. Use `--polytomy-mode hard` for such trees, or raise the limit
+deliberately.
 
 ### Zero-length edges
 

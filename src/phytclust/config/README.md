@@ -242,36 +242,60 @@ Use this section when you need exact field names and defaults.
 | `boundary_window_size`     | `int`           | `5`          | Right-window size for evaluating the `k=2` boundary candidate.                                     |
 | `boundary_ratio_threshold` | `float`         | `1.5`        | Minimum score ratio vs right-window median for `k=2` to pass.                                      |
 | `min_prominence`           | `float \| None` | `None`       | Minimum prominence for `scipy.signal.find_peaks`; `None` auto-sets to 1% of score range.           |
-| `min_k`                    | `int`           | `2`          | Peaks below this k are ignored.                                                                    |
+| `min_k`                    | `int`           | `2`          | Smallest cluster count considered for automatic peak selection.                                                                    |
 | `resolution_fallback_mode` | `str`           | `"none"`     | One of `"none"` \| `"max_score"`. Resolution mode only: `"none"` leaves a peak-less bin empty; `"max_score"` picks the max-score k in that bin. Any other value raises `ConfigurationError`. |
-| `exclude_k2`               | `bool`          | `True`       | Drop `k=2` (the trivial root-level split) from automatic peak selection. Set `False` to allow it. Exact `k=2` requests are always honoured. |
+| `exclude_k2`               | `bool`          | `False`      | Drop `k=2` from automatic peak selection. By default `k=2` is a candidate, judged by the boundary test. Exact `k=2` requests are always honoured. |
+| `use_log_peak_input` | `bool` | `False` | Detect peaks in the logarithm of nonnegative scores plus an offset. |
+| `log_peak_offset` | `float` | `1e-12` | Positive offset before taking logarithms; used only with log peak input. |
+| `use_relative_prominence` | `bool` | `False` | Rank prominence as the original peak score divided by its baseline score. |
+| `min_relative_prominence` | `float \| None` | `None` | Minimum peak-to-baseline ratio; used only with relative prominence. |
+| `prominence_k_power` | `float` | `0.0` | Multiply an explicit minimum prominence by cluster count raised to this power; used only without relative prominence. |
+
+Settings are checked again before peak detection, so changes made after construction are also validated. Weights and thresholds for disabled options are ignored. Relative prominence uses original scores even when peak detection uses logarithms.
+
+### OutlierConfig
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `size_threshold` | `int \| None` | `None` | Clusters with fewer leaves than this count are outliers. None counts singletons when prefer_fewer=True; otherwise it disables outlier counting in the DP. |
+| `prefer_fewer` | `bool` | `False` | Prioritize outlier count before partition cost. With no threshold, count singleton clusters. |
+| `penalty_enabled` | `bool` | `False` | Add a small-cluster penalty when a size threshold is set. Supported for binary trees. |
+| `ratio_weight` | `float` | `10.0` | Multiply the small-cluster penalty by this nonnegative weight. Zero disables the penalty. |
+| `ratio_mode` | `str` | `"exp"` | Penalty shape: exp(size shortfall) − 1, inverse cluster size, or size shortfall for the legacy "power" mode. |
+
+Penalty weights and modes are checked only when the penalty is enabled and a size threshold is set. With zero weight, the mode is ignored. DP validation repeats these checks after settings change. When `prefer_fewer=False`, cost takes priority and outlier count breaks cost ties.
+
+Saving with outlier labels enabled uses the configured size threshold, or a threshold of two when none is set. This labels singleton clusters as −1 by default, even when DP outlier counting is disabled.
 
 ### ScorePlotConfig
 
 | Field                       | Type            | Default    | Description                                  |
 | --------------------------- | --------------- | ---------- | -------------------------------------------- |
-| `title_fontsize`            | `int`           | `50`       | Title font size.                             |
-| `axis_label_fontsize`       | `int`           | `35`       | Axis label font size.                        |
-| `tick_labelsize`            | `int`           | `30`       | Tick label font size.                        |
-| `peak_labelsize`            | `int`           | `50`       | Peak annotation font size.                   |
-| `bin_labelsize`             | `int`           | `30`       | Bin label font size (resolution mode).       |
-| `fig_width`                 | `int`           | `18`       | Figure width in inches.                      |
-| `fig_height`                | `int`           | `10`       | Figure height in inches.                     |
-| `clamp_negative_to_zero`    | `bool`          | `True`     | Clamp negative scores to 0 on plot.          |
+| `title_fontsize`            | `int`           | `20`       | Title font size.                             |
+| `title_fontfamily` | `str` | `"Liberation Sans"` | Score title font; falls back to DejaVu Sans. |
+| `axis_label_fontsize`       | `int`           | `18`       | Axis label font size.                        |
+| `tick_labelsize`            | `int`           | `14`       | Tick label font size.                        |
+| `peak_labelsize`            | `int`           | `16`       | Peak annotation font size.                   |
+| `peak_marker`               | `str`           | `"o"`      | Matplotlib marker for peaks.                 |
+| `peak_markersize`           | `int`           | `7`       | Peak marker size; also sets label clearance. |
+| `bin_labelsize`             | `int`           | `14`       | Bin label font size (resolution mode).       |
+| `fig_width`                 | `float`           | `9`       | Figure width in inches.                      |
+| `fig_height`                | `float`           | `5`       | Figure height in inches.                     |
+| `clamp_negative_to_zero`    | `bool`          | `True`     | Show negative scores as zero.          |
 | `log_scale_y`               | `bool`          | `True`     | Use log scale on y-axis.                     |
 | `x_axis_mode`               | `str`           | `"log"`    | `"log"` or `"linear"` x-axis for k.          |
-| `log_base`                  | `float \| None` | `None`     | Log base for axes; `None` means natural log. |
+| `log_base`                  | `float \| None` | `None`     | Log base for axes; `None` means base ten. |
 | `prefer_unsmoothed_primary` | `bool`          | `True`     | Save k>=3 unsmoothed score curve as primary. |
 | `show_secondary_score_plot` | `bool`          | `False`    | Generate a secondary companion figure.       |
-| `colorblind_palette`        | `list[str]`     | (8 colors) | Palette for peak annotations.                |
+| `colorblind_palette`        | `list[str] \| None`     | `None` | Resolution band colours; None uses the built-in palette.                |
 
 ### ClusterPlotConfig
 
 | Field                 | Type    | Default   | Description                             |
 | --------------------- | ------- | --------- | --------------------------------------- |
-| `cmap`                | `str`   | `"tab20"` | Matplotlib colormap for cluster colors. |
-| `width_scale`         | `float` | `2.5`     | Horizontal tree scaling factor.         |
-| `height_scale`        | `float` | `0.30`    | Vertical scaling factor per leaf.       |
+| `cmap`                | `str`   | `"phytclust"` | Cluster palette name. |
+| `width_scale`         | `float` | `2.0`     | Horizontal tree scaling factor.         |
+| `height_scale`        | `float` | `0.1`    | Vertical scaling factor per leaf.       |
 | `marker_size`         | `int`   | `40`      | Terminal node marker size.              |
 | `show_branch_lengths` | `bool`  | `False`   | Annotate edges with branch lengths.     |
 | `hide_internal_nodes` | `bool`  | `True`    | Hide internal node markers.             |
@@ -282,3 +306,36 @@ Use this section when you need exact field names and defaults.
 | ---------- | ------ | ------------------------- | ---------------------------------------------- |
 | `tsv_name` | `str`  | `"phytclust_results.tsv"` | Default output filename (output is tab-separated). |
 | `outlier`  | `bool` | `True`                    | Annotate outlier clusters with `-1` in output. |
+
+`build_runtime_config` accepts nested mappings matching `RuntimeConfig`. Unknown settings produce a warning with the full setting name and are ignored. The `plot`, `plot.cluster`, `plot.scores`, and `save` sections must be mappings.
+
+### Rank peaks using cluster sizes
+
+`PeakConfig(partition_preference="balanced", partition_weight=0.5)` reorders
+detected peaks without changing the DP partitions, score curve, or candidate
+peaks. Keep `OutlierConfig(prefer_fewer=False)` to retain cost-first partitions.
+The DP's `prefer_fewer` option remains separate: it changes the optimization
+objective and can change the score curve.
+
+| Field | Default | Behavior |
+| --- | --- | --- |
+| `partition_preference` | `"none"` | `none` retains existing ranking; `fewer_outliers` favors fewer singleton cells; `balanced` also favors more even cluster sizes. |
+| `partition_weight` | `0.5` | Weight from 0 to 1. Zero retains existing ranking; one ranks by partition quality alone. Ignored for `none`. |
+
+For each candidate, singleton avoidance is `1 - singleton_count / cell_count`.
+Size balance is `cell_count**2 / (cluster_count * sum(size**2))`: one for equal
+cluster sizes and lower for uneven sizes. Balanced quality multiplies the two
+values, so a partition consisting entirely of singletons has zero quality.
+The new rank is `(1 - partition_weight) * peak_strength + partition_weight * quality`.
+Peak strength is the existing ranking metric divided by its maximum among
+candidates; it is one for all candidates when all existing metrics are zero.
+
+`peak_ranking_details` retains the original score, prominence, and combined
+metric and includes cluster sizes, singleton counts, size balance, partition
+quality, and the new ranking metric when the preference is active.
+Global and resolution modes both use the new order. It does not add peaks at
+requested cluster counts. Backtracking is only needed for detected candidates
+when the option is active and its weight is nonzero.
+
+CLI equivalents are `--peak-partition-preference balanced` and
+`--peak-partition-weight 0.5`.

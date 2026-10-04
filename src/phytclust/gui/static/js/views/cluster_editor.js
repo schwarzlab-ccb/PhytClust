@@ -143,6 +143,8 @@ export function populateClusterSelector(data) {
   const toggleEl = document.getElementById("cluster-view-toggle");
   if (!controls || !selectEl) return;
 
+  const savedView = state.pendingSessionView;
+  if (savedView) state.CLUSTER_VIEW_MODE = savedView.cluster_mode;
   const hasPeaks = (data.clusters || []).length > 1;
   const hasAll = !!(data.all_clusters && data.all_clusters.length > 1);
 
@@ -190,6 +192,15 @@ export function populateClusterSelector(data) {
         false,
         data.all_alphas,
       );
+    }
+  }
+  if (savedView) {
+    const counts = state.CLUSTER_VIEW_MODE === "all" ? data.all_ks : data.k_values || data.ks;
+    const index = counts?.indexOf(savedView.selected_k) ?? -1;
+    state.pendingSessionView = null;
+    if (index >= 0) {
+      selectEl.value = String(index);
+      switchCluster(index);
     }
   }
   controls.classList.add("visible");

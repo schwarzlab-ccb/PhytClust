@@ -9,11 +9,11 @@ where = ["src"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-phytclust = ["assets/*"]
+phytclust = ["assets/*", "gui/static/**/*", "gui/templates/**/*"]
 
 [project]
 name = "phytclust"
-version = "0.1.2"
+version = "1.0.0"
 description = "PhytClust takes a phylogenetic tree as input and outputs monophyletic leaf clusters that best fit the tree structure."
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -97,7 +97,9 @@ E(k) = (β(k−1) − β(k)) / (β(k) − β(k+1))
 ```
 
 E is large exactly at an elbow, where a large gain is followed by a small one. It
-is clamped to at most 50 so that a near-zero denominator cannot dominate.
+is clamped to at most 50 so that a near-zero denominator cannot dominate, and it
+is 0 wherever either neighbouring drop is below `1e-12 · β(1)`. That threshold
+is relative, so rescaling every branch length leaves the curve unchanged.
 
 **The score curve is their product**, `score(k) = E(k) · V(k)`. This is what
 `pc.scores` holds, what `scores.png` plots, and what `scipy.signal.find_peaks`
@@ -105,8 +107,10 @@ is run on. Requiring both factors is what makes a peak meaningful: V alone
 favours large *k* on many trees, and E alone fires on any local flattening
 however small the cluster structure behind it.
 
-Peak detection runs on the *k* ≥ 3 portion of that curve (see
-[skipping *k* = 2](#skipping-k-2)), and peaks are ranked by **prominence**, the
+Peaks are sought over *k* from 2 up to the maximum. `find_peaks` cannot report
+the first sample of a curve, so *k* = 2 is judged by a separate boundary test
+(see [*k* = 2 and the boundary test](#k-2-and-the-boundary-test)), and peaks are
+ranked by **prominence**, the
 height of a peak relative to its neighbours.
 
 ### Relationship to the Calinski-Harabasz index
@@ -148,7 +152,7 @@ This is not a cosmetic change. The two forms differ by a factor of
 *k* grows — so relative to CH, the PhytClust weight penalises small *k* and
 converges with CH at large *k*. It can therefore reorder peaks, and it is
 intended to: the smallest *k* values are the least informative on a tree (see
-[skipping *k* = 2](#skipping-k-2)). The practical consequence is that the
+[*k* = 2 and the boundary test](#k-2-and-the-boundary-test)). The practical consequence is that the
 reported numbers are not CH values and should not be compared against published
 CH thresholds.
 
@@ -171,19 +175,24 @@ That normalise-then-blend behaviour is what `ranking_mode="adjusted"` (the
 default) means. `ranking_mode="raw"` instead ranks by absolute prominence with
 no normalisation and ignores `prominence_weight`.
 
-### Skipping *k* = 2
+### *k* = 2 and the boundary test
 
-*k* = 2 is the trivial first split. Every binary tree has a clean root-level cut,
-and that cut almost always produces a large drop in cost, so left in the running
-it dominates the top of the ranking on most trees. Halving the tree at the root
-is rarely the reason anyone runs a clustering algorithm.
+Candidates for the selected *k* run over *k* = 2 … *N* − 1, so *k* = 2 is in
+the running by default. It needs its own test because it is the first point of
+the curve and `find_peaks` never reports an endpoint. *k* = 2 becomes a
+candidate when its score exceeds the score at *k* = 3 and is more than
+`boundary_ratio_threshold` (default 1.5) times the median of the next
+`boundary_window_size` (default 5) scores. Its prominence is its height above
+that median. The interior search starts at *k* = 3, whose left neighbour is
+replaced by a sentinel below the curve, so *k* = 3 can be a peak even when the
+score at *k* = 2 is higher.
 
-*k* = 2 is therefore dropped from automatic peak selection by default. In
-`top_n` mode the next-ranked peak takes its slot; in resolution mode, a bin that
-would have selected *k* = 2 advances to its next candidate.
-
-`exclude_k2=False`, or `--include-k2` on the CLI, puts it back in the running.
-An explicit `run(k=2)` always returns *k* = 2 — the flag affects automatic
+On many trees the root split is a clean cut that produces a large drop in cost,
+and *k* = 2 then dominates the ranking. When that split is not what you are
+after, `exclude_k2=True`, or `--exclude-k2` on the CLI, drops it from automatic
+selection: in `top_n` mode the next-ranked peak takes its slot, and in resolution
+mode a bin that would have selected *k* = 2 advances to its next candidate. An
+explicit `run(k=2)` always returns *k* = 2 — the flag affects automatic
 selection only.
 
 ## Polytomies
@@ -216,7 +225,7 @@ polytomy is by definition unresolved about that ordering.
 
 Two strategies are available.
 
-**Hard mode** (`--polytomy-mode hard`, the default) treats the polytomy as
+**Hard mode** (`--polytomy-mode hard`) treats the polytomy as
 all-or-nothing. At the polytomy node the DP has exactly two kinds of option:
 
 - merge **all** of the children into a single cluster rooted at the node, or
@@ -229,7 +238,7 @@ a hard multifurcation: since the tree asserts that these lineages diverged
 simultaneously, it provides no grounds for preferring `{A,B}` over `{B,C}`, and
 hard mode declines to invent one.
 
-**Soft mode** (`--polytomy-mode soft`) removes exactly that restriction. Any
+**Soft mode** (`--polytomy-mode soft`, the default) removes exactly that restriction. Any
 subset of the children may be grouped, by treating them as though they hung from
 a hidden zero-length node inside the polytomy. This is the resolution the data
 could not supply, reintroduced as a search over groupings.
@@ -252,16 +261,31 @@ what it actually compares.
 That expressiveness is expensive. Soft mode's search space is the set of
 partitions of the children, which grows as the Bell number of the child count:
 12 children give about 4.2 million partitions, 16 give about 10.5 billion, and 18
-give roughly 680 billion. PhytClust therefore reverts to hard mode automatically
-once the node degree exceeds `soft_polytomy_max_degree` (default 12).
+give roughly 680 billion. Soft mode therefore refuses any node whose degree
+exceeds `soft_polytomy_max_degree` (default 12) and raises an error naming that
+degree. Hard mode has no such limit, so run trees with larger multifurcations
+with `--polytomy-mode hard`, or raise the limit deliberately.
 
 Note that `F` in the diagram is a *sibling* of the polytomy, not one of its
 children, so no polytomy setting can group `A` with `F` without also taking the
 rest of the polytomy — that grouping is governed by the ordinary DP, not by
 `--polytomy-mode`.
 
-Hard mode is the right default. Soft mode is worth trying on polytomies of
-moderate degree (5-15) where the resulting clusters look forced.
+Soft mode is the default because a multifurcation in an inferred tree is usually
+a soft polytomy: the branching order was not resolved, not simultaneous. Choose
+hard mode when the multifurcation is believed to be real, or when a node exceeds
+the degree limit.
+
+### Equal-cost choices
+
+Several allocations of clusters to a node's children can reach the same minimum
+cost. Among them PhytClust keeps the one with the smallest sum of squared
+per-child cluster counts, Σ *m*ⱼ², which spreads clusters across the children
+rather than piling them into one. At a bifurcating node this is the most even
+split; at a polytomy it is taken over all children at once, in hard and soft mode
+alike. Allocations still equal after that keep the first one in child order, so
+repeated runs return the same partition. `save_tied_optima=True` records every
+cost-optimal partition for each backtracked *k*.
 
 ## Outlier handling
 
@@ -321,6 +345,6 @@ Two practical notes:
 | **DP** | Exact bottom-up algorithm; each node visited once; O(*n* · *k*²) |
 | **Score curve** | Evaluated over *k*; peaks mark candidate cluster boundaries |
 | **Peak ranking** | Prominence-based, with optional outlier adjustment |
-| **Polytomies** | Hard mode keeps each child in one cluster; soft mode allows arbitrary subsets, at Bell-number cost |
+| **Polytomies** | Soft mode (default) allows any group of children, at Bell-number cost; hard mode keeps each child in one cluster |
 | **Outliers** | Hard constraint on size, or soft marking with a threshold |
 | **Zero-length edges** | Optional flag forbidding cuts where the branch carries no information |

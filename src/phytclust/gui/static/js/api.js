@@ -174,7 +174,7 @@ export async function runPhytClust() {
   }
   const runButton = document.getElementById("btn-run");
   const originalButtonContent = runButton?.innerHTML;
-  const resultFields = ["NEWICK_RAW_TREE", "CURRENT_CLUSTERS", "CLUSTER_COLORS", "HIER_CART", "HIER_CIRC", "latestApiData", "latestRunId", "lastRunSignature", "latestOptimalKData", "CLUSTER_VIEW_MODE", "runHistory"];
+  const resultFields = ["NEWICK_RAW_TREE", "CURRENT_CLUSTERS", "CLUSTER_COLORS", "HIER_CART", "HIER_CIRC", "latestApiData", "latestRunId", "lastRunSignature", "latestOptimalKData", "CLUSTER_VIEW_MODE", "pendingSessionView", "runHistory"];
   const previousState = Object.fromEntries(resultFields.map((name) => [name, state[name]]));
   let updatingViews = false;
   state.isRunning = true;

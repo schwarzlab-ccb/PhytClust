@@ -1,10 +1,7 @@
-/* ============================================================
-   PhytClust – state.js
-   All mutable application state in one place.
-   ============================================================ */
+// Shared tree data, display settings, and selection state.
 
 export const state = {
-  // --- Data state ---------------------------------------------------------
+  // Tree data and current results.
   HIER_CART: null,
   HIER_CIRC: null,
   CLUSTER_COLORS: [],
@@ -16,6 +13,7 @@ export const state = {
   latestApiData: null,
   lastRunSignature: null,
   latestRunId: null,
+  pendingSessionView: null,
   LAST_TREE_SVG: null,
   LAST_TREE_ZOOM: null,
   LAST_ZOOM_LAYER: null,
@@ -35,11 +33,9 @@ export const state = {
   CTX_TARGET_DATA: null,
   runHistory: [],
 
-  // --- Render options (single source of truth for "what the tree looks like") ---
-  // Read/write via state.render.* directly, or via setRenderOption /
-  // getRenderOption for dotted-path access.
+  // Display settings.
   render: {
-    layout: "rectangular", // "rectangular" | "circular"
+    layout: "rectangular", // rectangular, cladogram, or circular
     branches: {
       width: 1.2,
       color: null,       // null = use cluster colour
@@ -56,7 +52,7 @@ export const state = {
       internalRadius: 1.8,
     },
     clusters: {
-      colorMode: "bars", // "bars" | "boxes" | ...
+      colorMode: "bars", // bars or boxes
       labelFontSize: 8,
       showBoxLabels: true,
       showOutlierBoxes: true,
@@ -77,65 +73,76 @@ export const state = {
   },
 };
 
-/**
- * Set a render option by dotted path, e.g. setRenderOption("labels.fontSize", 12).
- * Does not trigger a redraw — callers handle that. Returns the value written.
- */
+// Find an existing display setting without following inherited properties.
+function renderOptionLocation(path) {
+  if (typeof path !== "string" || !path) {
+    throw new Error("A display setting path is required.");
+  }
+  const names = path.split(".");
+  let settings = state.render;
+  for (const name of names.slice(0, -1)) {
+    if (!settings || typeof settings !== "object" ||
+        !Object.hasOwn(settings, name)) {
+      throw new Error(`Unknown display setting: ${path}`);
+    }
+    settings = settings[name];
+  }
+  const name = names[names.length - 1];
+  if (!settings || typeof settings !== "object" ||
+      !Object.hasOwn(settings, name)) {
+    throw new Error(`Unknown display setting: ${path}`);
+  }
+  return { settings, name };
+}
+
+/** Set an existing display setting. The caller redraws the view. */
 export function setRenderOption(path, value) {
-  const parts = path.split(".");
-  let cur = state.render;
-  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
-  cur[parts[parts.length - 1]] = value;
+  const { settings, name } = renderOptionLocation(path);
+  settings[name] = value;
   return value;
 }
 
-/**
- * Read a render option by dotted path, e.g. getRenderOption("labels.fontSize").
- */
+/** Read a display setting such as "labels.fontSize". */
 export function getRenderOption(path) {
-  const parts = path.split(".");
-  let cur = state.render;
-  for (const k of parts) cur = cur[k];
-  return cur;
+  const { settings, name } = renderOptionLocation(path);
+  return settings[name];
 }
 
-/**
- * Return a deep copy of state.render with the given overrides merged in.
- * Useful for "publication preset" exports that want a tweaked snapshot
- * without mutating the live render state.
- */
+/** Copy the display settings and apply partial overrides. */
 export function renderOptionsWithOverrides(overrides = {}) {
-  const clone = JSON.parse(JSON.stringify(state.render));
-  const merge = (dst, src) => {
-    for (const [k, v] of Object.entries(src)) {
-      if (v && typeof v === "object" && !Array.isArray(v)) {
-        if (!dst[k] || typeof dst[k] !== "object") dst[k] = {};
-        merge(dst[k], v);
+  const copy = structuredClone(state.render);
+  function applyOverrides(settings, changes, parentPath = "") {
+    if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+      throw new Error(`Display overrides must be an object: ${parentPath || "render"}`);
+    }
+    for (const [name, value] of Object.entries(changes)) {
+      const path = parentPath ? `${parentPath}.${name}` : name;
+      if (!Object.hasOwn(settings, name)) {
+        throw new Error(`Unknown display setting: ${path}`);
+      }
+      if (settings[name] !== null && typeof settings[name] === "object") {
+        applyOverrides(settings[name], value, path);
       } else {
-        dst[k] = v;
+        if (value !== null && typeof value === "object") {
+          throw new Error(`Display setting requires a single value: ${path}`);
+        }
+        settings[name] = value;
       }
     }
-  };
-  merge(clone, overrides);
-  return clone;
+  }
+  applyOverrides(copy, overrides);
+  return copy;
 }
 
-/**
- * Temporarily swap state.render for a copy with `overrides` merged in,
- * invoke `fn`, then restore the original. Useful for export presets:
- * the live view is briefly redrawn under the preset, snapshotted, and
- * restored. Returns whatever `fn` returns.
- *
- * `redraw` is called once after applying overrides and once after restoring.
- */
-export function withRenderOverrides(overrides, redraw, fn) {
-  const original = state.render;
+/** Redraw with temporary settings, take a synchronous snapshot, then restore. */
+export function withRenderOverrides(overrides, redraw, takeSnapshot) {
+  const originalSettings = state.render;
   state.render = renderOptionsWithOverrides(overrides);
   try {
     if (typeof redraw === "function") redraw();
-    return fn();
+    return takeSnapshot();
   } finally {
-    state.render = original;
+    state.render = originalSettings;
     if (typeof redraw === "function") redraw();
   }
 }
@@ -146,21 +153,21 @@ export const EXAMPLE_NEWICK =
   "(((A:5, B:3)C1:6, (C:3, D:7)D1:4)A13:22, (((E:7, F:13)E12:5, G:6)B23:10, H:60):35):0;";
 
 export const SELECTED_CLUSTER_IDS = new Set();
-export const BOX_LABEL_MAP = {}; // cid -> custom name, editable via context menu
-export const BOX_ADJUST_MAP = {}; // cid -> {dx, dy, padX, padY} in px
+export const BOX_LABEL_MAP = Object.create(null); // Cluster ID to custom name.
+export const BOX_ADJUST_MAP = Object.create(null); // Cluster ID to box offsets in pixels.
 
-// Per-node customizations: keyed by data node reference
+// Custom settings for each tree node.
 export const NODE_CUSTOM = new WeakMap();
 
-export function hasClusterFocus(cid) {
-  if (cid == null) return SELECTED_CLUSTER_IDS.size === 0;
+export function hasClusterFocus(clusterId) {
+  if (clusterId == null) return SELECTED_CLUSTER_IDS.size === 0;
   return (
-    SELECTED_CLUSTER_IDS.size === 0 || SELECTED_CLUSTER_IDS.has(Number(cid))
+    SELECTED_CLUSTER_IDS.size === 0 || SELECTED_CLUSTER_IDS.has(Number(clusterId))
   );
 }
 
-export function getBoxAdjust(cid) {
-  const key = String(cid);
+export function getBoxAdjust(clusterId) {
+  const key = String(clusterId);
   if (!BOX_ADJUST_MAP[key]) {
     BOX_ADJUST_MAP[key] = { dx: 0, dy: 0, padX: 0, padY: 0 };
   }

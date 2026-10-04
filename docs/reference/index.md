@@ -17,7 +17,7 @@ phytclust gui [options]      # launch the web GUI
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-k, --k` | — | Exactly this many clusters (≥ 2) |
+| `-k, --k` | — | Exactly this many clusters (≥ 1) |
 | `--top-n` | `1` | Number of peaks taken from the global score curve |
 | `--resolution` | off | One peak per log bin |
 | `--max-k` | — | Upper bound on *k*; defaults to `ceil(max_k_limit · n_leaves)` |
@@ -27,7 +27,7 @@ phytclust gui [options]      # launch the web GUI
 | `--save-fig` | off | Write score and tree PNGs |
 | `--tsv-name` | `phytclust_results.tsv` | Output table |
 | `--config` | — | YAML/JSON config file |
-| `--no-plot` | plots shown | Suppress interactive windows |
+| `--plot` | off | Open interactive plot windows (blocks until they are closed) |
 
 ### Other flags
 
@@ -36,14 +36,13 @@ phytclust gui [options]      # launch the web GUI
 | `--bins` | `3` | Bins for `--resolution` |
 | `--max-k-limit` | `0.9` | *k* ceiling as a fraction of `n_leaves` |
 | `--prominence-weight` | `0.7` | Peak-rank blend: 1 = rank by prominence, 0 = by score height |
-| `--include-k2` | off | Allow *k* = 2 (the trivial root split, dropped by default) |
+| `--exclude-k2` | off | Drop *k* = 2 from automatic selection (`--include-k2` is accepted but deprecated; *k* = 2 is a candidate by default) |
 | `--min-cluster-size` | `1` | Hard minimum cluster size |
 | `--outlier-size-threshold` | — | Clusters below this size are marked `-1` |
 | `--prefer-fewer-outliers` | off | Make the DP minimise outlier count before cost (needs `--outlier-size-threshold`) |
-| `--polytomy-mode` | `hard` | `hard` = child goes wholly into one cluster; `soft` = partial merges |
-| `--soft-polytomy-max-degree` | `12` | Soft mode reverts to hard above this degree |
+| `--polytomy-mode` | `soft` | `soft` = any group of a multifurcation's children may form a cluster; `hard` = each child goes wholly into one cluster |
+| `--soft-polytomy-max-degree` | `12` | Soft mode raises at nodes above this degree; use `hard` for them |
 | `--no-split-zero-length` | off | Forbid splitting zero-length edges |
-| `--no-optimize-polytomies` | off | Legacy dummy-node resolution |
 | `--save-tree` `--save-all-k` `--no-tsv` `--dpi` | — | Tree-only PNGs · every *k* · skip TSV · PNG dpi (`150`) |
 | `-v` `-q` `--time` `--progress` `--no-color` `--version` | — | Verbosity · timing · spinner · colour · version |
 
@@ -84,7 +83,7 @@ runtime:
 | `prominence_weight` | `0.7` | Blend when `ranking_mode="adjusted"`: `1` ranks by prominence only, `0` by score height only |
 | `ranking_mode` | `"adjusted"` | `"adjusted"` min–max normalises prominence and score, then blends them by `prominence_weight`; `"raw"` ranks by absolute prominence alone and ignores it |
 | `min_prominence` | `None` | Minimum peak prominence; `None` derives it from the score range |
-| `exclude_k2` | `True` | Drop the trivial *k* = 2 split ([why](../concepts.md#skipping-k-2)). An explicit `k=2` is always honoured |
+| `exclude_k2` | `False` | Drop *k* = 2 from automatic selection ([details](../concepts.md#k-2-and-the-boundary-test)). An explicit `k=2` is always honoured |
 | `min_k` | `2` | Ignore peaks below this *k* |
 | `use_relative_prominence` | `False` | Rank by fold-change rather than absolute prominence |
 
@@ -136,8 +135,7 @@ pc = PhytClust(
     root_taxon=None,               # taxon to root on, or "midpoint"
     min_cluster_size=1,
     outlier=OutlierConfig(),       # size threshold / DP penalty / tie-breaking
-    optimize_polytomies=True,
-    polytomy_mode="hard",          # "hard" | "soft"
+    polytomy_mode="soft",          # "soft" | "hard"
     soft_polytomy_max_degree=12,
     no_split_zero_length=False,
     dp_float32=False,              # halve DP memory on very large trees

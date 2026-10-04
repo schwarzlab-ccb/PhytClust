@@ -22,7 +22,7 @@ pc = PhytClust(
     tree,
     min_cluster_size=2,
     outlier=OutlierConfig(size_threshold=3, prefer_fewer=True),
-    optimize_polytomies=True,
+    polytomy_mode="soft",
 )
 ```
 

@@ -5,9 +5,56 @@ All notable changes to _PhytClust_ will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] – 2026-08-12
+## [Unreleased]
+
+## [1.0.0] – 2026-10-04
 
 First stable release, accompanying the PhytClust manuscript.
+
+Aligns the algorithm with the manuscript Methods.
+
+### Added
+
+- Optional peak ranking by fewer singleton outliers or balanced cluster sizes,
+  through `partition_preference` and `partition_weight`. This reorders detected
+  candidates without changing score curves or the DP objective.
+- CLI flags `--peak-partition-preference` and `--peak-partition-weight`.
+
+### Changed
+
+- Balanced split selection for tied binary and polytomy partitions.
+- Larger score-plot labels and clearer default cluster plots.
+- `OutlierConfig(prefer_fewer=True)` counts singleton clusters when no size
+  threshold is supplied.
+- **Soft polytomy is now the default** (`polytomy_mode="soft"`, CLI and GUI
+  alike). Nodes above `soft_polytomy_max_degree` (12) raise; use
+  `polytomy_mode="hard"` / `--polytomy-mode hard` for them.
+- **k = 2 is a candidate for automatic selection by default**
+  (`PeakConfig.exclude_k2=False`). The CLI flag is now `--exclude-k2`;
+  `--include-k2` is accepted with a deprecation warning.
+- Equal-cost splits at a hard polytomy minimise the sum of squared cluster
+  counts over all its children, not pairwise along the fold.
+- Tie tolerances and the EL1 drop guard are relative, so a global rescaling of
+  branch lengths no longer changes which partition or *k* is selected.
+- α (`cluster_alpha`) no longer counts the root as an extra-cluster edge. After
+  outgroup pruning this could add the old root branch to the backbone mean.
+- `-k 1` is accepted on the CLI.
+- Resolution-mode clade-level bins start at k = 1 instead of the smallest
+  candidate (2). Starting at 2 made the first bin run to about
+  2·(K/2)^(1/b), which on the avian tree (b = 5) put k = 3 and k = 6 in the
+  same bin, so the second coarse level was never reported.
+- The GUI has a polytomy-mode selector in place of the removed "Optimize
+  polytomies" toggle, and reports configuration errors (such as a polytomy
+  above the soft-mode degree limit) instead of a generic server error.
+
+### Fixed
+
+- `run(max_k_limit=...)` was ignored after the first run, and a `max_k` passed
+  to one `run()` was reused by later runs.
+- `save_tied_optima=True` re-entered `backtrack` recursively (hundreds of times
+  per *k*) before the recursion limit stopped it.
+- Documentation and the demo notebook no longer use the removed
+  `optimize_polytomies` argument.
 
 ### Added
 
@@ -49,8 +96,8 @@ First stable release, accompanying the PhytClust manuscript.
 - The outlier-aware DP inner loop now pairs children with contiguous slices
   instead of building index arrays and gathering through them once per *k*,
   matching what the no-outlier branch already did. Since `size_threshold`
-  defaults to `2`, this is the branch nearly every run takes; it is roughly
-  2-3x faster. Selected *k*, cluster assignments and DP costs are unchanged.
+  is set, this reduces temporary allocations. Selected *k*, cluster
+  assignments and DP costs are unchanged.
 
 #### Changes that alter output
 
@@ -59,8 +106,7 @@ These change results for code that is otherwise unmodified.
 - `select_representative_species` now defaults to the central leaf rather than the
   most divergent one. Pass `strategy="divergent"` to restore the old behaviour.
 - `soft_polytomy_max_degree` default lowered from 18 to 12. Polytomies of degree
-  13 to 18 that previously used soft mode now fall back to hard mode. Set the
-  value explicitly to keep the old behaviour.
+  13 to 18 now require hard mode or an explicitly increased degree limit.
 - Cluster palette reordered so that adjacent clusters stay visually distinct.
   Plots and the GUI now agree, but figures regenerated with this release differ in
   colour from earlier ones.
@@ -75,13 +121,13 @@ These change results for code that is otherwise unmodified.
 
 ### Deprecated
 
-- `PeakConfig.lambda_weight` and `--lambda-weight` still work but emit a
-  `DeprecationWarning`. Scheduled for removal in 2.0.0.
 - `SaveConfig.csv_name` still works but emits a `DeprecationWarning`. Scheduled
   for removal in 2.0.0.
 
 ### Removed
 
+- The old `lambda_weight` config key and `--lambda-weight` CLI alias. Use
+  `prominence_weight` and `--prominence-weight`.
 - `CoreConfig`, which was unused.
 
 ### Fixed

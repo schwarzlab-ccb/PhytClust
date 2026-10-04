@@ -8,25 +8,27 @@ from pathlib import Path
 from io import StringIO
 
 from Bio import Phylo
+from Bio.Phylo.NewickIO import NewickError
 
 from ..exceptions import (
     InvalidKError,
     ConfigurationError,
+    InvalidClusteringError,
     MissingDPTableError,
     ValidationError,
 )
 from Bio.Phylo.BaseTree import Tree
 
 from ..algo.dp import (
-    validate_args,
+    validate_clustering_parameters,
     prepare_tree,
     compute_dp_table,
     backtrack,
 )
 from ..algo.scoring import calculate_scores, find_score_peaks
 from ..config import OutlierConfig, PeakConfig, RuntimeConfig
-from ..metrics.indices import cluster_alpha
-from ..utils.traversal import iter_clades
+from ..metrics.indices import AlphaIndex, cluster_alpha
+from ..utils.traversal import tree_fingerprint
 
 logger = logging.getLogger("phytclust")
 
@@ -35,32 +37,34 @@ IntMap = dict[Any, int]
 
 def _coerce_to_tree(obj: Any) -> Tree:
     """
-    Accepts:
-      - Bio.Phylo.BaseTree.Tree  -> returned as-is
-      - pathlib.Path             -> read as Newick
-      - str:
-          * if it looks like a file path and exists -> read as Newick file
-          * otherwise -> treat as a Newick string
+    Read a tree from a Tree object, Newick string, or file path.
 
-    Raises ValidationError if the object cannot be interpreted as a tree.
+    Return Tree objects unchanged. Read existing string paths as files;
+    otherwise parse strings as Newick. Raise ValidationError for unsupported
+    input types or reading and parsing errors.
     """
     if isinstance(obj, Tree):
         return obj
 
+    def read_newick(source):
+        try:
+            return Phylo.read(source, "newick")
+        except (OSError, ValueError, NewickError) as exc:
+            raise ValidationError(f"Cannot read tree as Newick: {exc}") from exc
+
     if isinstance(obj, Path):
-        return Phylo.read(str(obj), "newick")
+        return read_newick(obj)
 
     if isinstance(obj, str):
         try:
             candidate = Path(obj)
             if candidate.exists():
-                return Phylo.read(str(candidate), "newick")
+                return read_newick(candidate)
         except OSError:
-            # String too long to be a valid path (Errno 36) — treat as Newick
             pass
 
         handle = StringIO(obj)
-        return Phylo.read(handle, "newick")
+        return read_newick(handle)
 
     raise ValidationError(
         f"Unsupported tree input type: {type(obj)!r}. "
@@ -75,15 +79,17 @@ class PhytClust:
 
     Parameters
     ----------
-    tree : Bio.Phylo.BaseTree.Tree
-        The input tree (you can pass a Newick string/file upstream).
+    tree : Bio.Phylo.BaseTree.Tree, str, or pathlib.Path
+        Input tree, Newick string, or path to a Newick file.
     outgroup : str | None, default=None
-        Taxon to exclude from all clusters (treated as outgroup).
+        Name of the node whose subtree is excluded from clustering.
+    root_taxon : str | None, default=None
+        Node name to root on, or "midpoint" for midpoint rooting.
     min_cluster_size : int, default=1
-        Hard constraint: final clusters smaller than this are disallowed.
+        Minimum number of leaves allowed in a final cluster.
     k : int | None, default=None
-        Fixed number of clusters (only used when you call `run(k=...)`
-        or `get_clusters(k)` explicitly).
+        Default number of clusters for ``run()``. An explicit ``run(k=...)``
+        argument overrides this value.
     max_k : int | None, default=None
         Upper bound on k for scoring / peak search. If None, derived
         from `max_k_limit * num_terminals`.
@@ -100,7 +106,7 @@ class PhytClust:
     min_support : float, default=0.05
         Minimal support used when normalizing (avoid division by 0).
     support_weight : float, default=1.0
-        Weight of the support-derived penalty in `_eff_length`.
+        Weight of the branch-support penalty in effective branch lengths.
 
     Outlier handling
     ----------------
@@ -110,19 +116,28 @@ class PhytClust:
 
     Other flags
     -----------
-    optimize_polytomies : bool, default=True
-        If True, use native DP over multifurcations.
-    polytomy_mode : {"hard", "soft"}, default="hard"
-        Hard mode forbids cross-child partial merges; soft mode allows them.
+    polytomy_mode : {"hard", "soft"}, default="soft"
+        Soft mode treats a multifurcation as unresolved zero-length branching,
+        so any group of two or more of its children may form a cluster. Hard
+        mode forbids cross-child partial merges. Soft mode is bounded by
+        `soft_polytomy_max_degree`; use hard mode for larger multifurcations.
     soft_polytomy_max_degree : int, default=12
-        Degree guardrail for soft mode's exponential subset DP. Soft-mode work is
-        Θ(3^degree); a degree-12 polytomy is already ~5e5 subset-iterations, so
-        raise this only deliberately for a specific tree.
+        Maximum number of children allowed in soft mode. Computation grows
+        exponentially with the number of children.
     preserve_dp_tables : bool, default=False
         Keep intermediate child DP rows instead of freeing them after merge.
         Useful for debugging/inspection; increases memory usage.
     compute_all_clusters : bool, default=False
         If True in best_global, compute and cache all k clusterings up to max_k.
+    save_tied_optima : bool, default=False
+        Record partitions that tie for the optimum at each backtracked k,
+        in `tied_optima`. Ties are common under `polytomy_mode="soft"`, where
+        regrouping children across a zero-length implied branch can leave the
+        cost unchanged. Forces `preserve_dp_tables`, since the enumeration
+        reads the per-child tables the DP would otherwise free.
+    max_tied_optima : int, default=100
+        Cap on partitions recorded per k. The optimal set can be exponentially
+        large, so enumeration stops at the cap and flags the result truncated.
     """
 
     tree: Any
@@ -134,23 +149,21 @@ class PhytClust:
     max_k_limit: float = 0.9
     num_bins: int = 3
 
-    # tunables
     use_branch_support: bool = False
     min_support: float = 0.05
     support_weight: float = 1.0
 
-    # outlier handling
     outlier: OutlierConfig = field(default_factory=OutlierConfig)
     use_penalized_beta_for_scoring: bool = False
 
-    # zero-length edge handling
     no_split_zero_length: bool = False
-    optimize_polytomies: bool = True
-    polytomy_mode: str = "hard"
+    polytomy_mode: str = "soft"
     soft_polytomy_max_degree: int = 12
     preserve_dp_tables: bool = False
 
-    # float32 DP: saves memory on very large trees, costs score precision.
+    save_tied_optima: bool = False
+    max_tied_optima: int = 100
+
     dp_float32: bool = False
 
     compute_all_clusters: bool = False
@@ -166,34 +179,31 @@ class PhytClust:
         self.dp_table = None
         self.postorder_nodes = None
         self.node_to_id = None
+        self.dp_children = None
         self.num_terminals = 0
         self._tree_wo_outgroup = None
 
         self.scores = None
         self.peaks_by_rank = None
         self.alpha_by_k: dict[int, dict[str, Any]] = {}
+        self._alpha_index: Optional[AlphaIndex] = None
 
         self._dp_ready = False
-        # Tree hash + every parameter that changes the DP contents.
         self._dp_cache_sig: Optional[tuple] = None
-        # Grows monotonically, so asking for a smaller k is a cache hit.
         self._dp_cap: Optional[int] = None
-        # _vectorised_dp_row_scores outputs; shrinking max_k slices instead
-        # of recomputing.
         self._score_raw_arrays: Optional[tuple] = None
         self._score_raw_cap: Optional[int] = None
         self._score_raw_base_sig: Optional[tuple] = None
-        # Cache key for pc.scores: depends on DP + max_k + scoring flags.
         self._scores_cache_sig: Optional[tuple] = None
         self.clusters: dict[int, IntMap] = {}
         self._last_result: Optional[dict[str, Any]] = None
 
+        user_max_k = self.max_k
         prepare_tree(self)
+        self._auto_max_k: Optional[int] = self.max_k if user_max_k is None else None
+        self._prepared_tree_sig = (self._hash_tree(), self.outgroup)
 
     def __repr__(self) -> str:
-        # Concise, informative summary instead of the dataclass default (which
-        # would dump the whole Bio.Phylo tree object and every config field).
-        # Also serves as __str__ (str/print fall back to __repr__).
         parts = [f"terminals={getattr(self, 'num_terminals', 0)}"]
         if self.outgroup:
             parts.append(f"outgroup={self.outgroup!r}")
@@ -210,27 +220,15 @@ class PhytClust:
         return f"PhytClust({', '.join(parts)})"
 
     def _hash_tree(self) -> int:
-        """Tree fingerprint, used to detect modifications.
+        """Return a fingerprint of topology, names, lengths, and confidence.
 
-        Hashes topology, names and branch lengths directly. ``format("newick")``
-        would serialise the whole tree to a string on every cache check, which
-        on a few thousand tips costs more than the check saves.
+        Ignore child order. Backtracking uses the order stored in ``dp_children``.
         """
-        try:
-            acc = 0
-            for node in iter_clades(self.tree.root, "preorder"):
-                acc = hash((acc, node.name, node.branch_length, len(node.clades)))
-            return acc
-        except Exception:
-            return hash(repr(self.tree))
+        return tree_fingerprint(self.tree.root)
 
     def _dp_signature(self) -> tuple:
         """
-        Full cache key for the DP table.
-
-        Anything that can change the contents of dp_table / raw_dp_table /
-        backptr must be included here, otherwise ``_ensure_dp`` will reuse
-        stale results after a parameter change on the same instance.
+        Return the cache key for the tree and parameters that affect clustering.
         """
         return (
             self._hash_tree(),
@@ -241,10 +239,10 @@ class PhytClust:
             self.use_branch_support,
             self.min_support,
             self.support_weight,
-            self.optimize_polytomies,
             self.polytomy_mode,
             self.soft_polytomy_max_degree,
             self.preserve_dp_tables,
+            self.save_tied_optima,
             self.dp_float32,
             self.outlier.size_threshold,
             self.outlier.prefer_fewer,
@@ -254,17 +252,24 @@ class PhytClust:
         )
 
     def _scores_signature(self) -> tuple:
-        """Cache key for ``pc.scores`` (depends on DP sig + scoring knobs)."""
+        """Return the cache key for scores."""
         return (
             self._dp_cache_sig,
             self.max_k,
             bool(getattr(self, "use_penalized_beta_for_scoring", False)),
+            float(getattr(self, "score_beta_floor_frac", 0.0) or 0.0),
+            float(getattr(self, "score_beta_floor_abs", 0.0) or 0.0),
         )
 
     def _resolve_dp_cap(self, required_cap: Optional[int]) -> int:
-        """Pick the DP-array cap to build for, clamped to num_terminals."""
+        """Choose the maximum k to compute, limited to the number of leaves.
+
+        Include a caller's ``max_k`` even if the current request needs fewer clusters.
+        """
         if required_cap is not None:
             cap = required_cap
+            if self._max_k_is_user_set():
+                cap = max(cap, self.max_k)
         elif self.max_k is not None:
             cap = self.max_k
         else:
@@ -272,31 +277,48 @@ class PhytClust:
         return max(1, min(self.num_terminals, int(cap)))
 
     def _ensure_dp(self, required_cap: Optional[int] = None) -> None:
+        """Reuse valid DP tables or rebuild them for the current tree and settings."""
+        tree_sig = (self._hash_tree(), self.outgroup)
+        if tree_sig != self._prepared_tree_sig:
+            user_max_k = self.max_k if self._max_k_is_user_set() else None
+            root_taxon = self.root_taxon
+            self.max_k = user_max_k
+            self.root_taxon = None
+            try:
+                prepare_tree(self)
+            finally:
+                self.root_taxon = root_taxon
+            if user_max_k is None:
+                self._auto_max_k = self.max_k
+            self._prepared_tree_sig = (self._hash_tree(), self.outgroup)
+            self._dp_ready = False
         current = self._dp_signature()
         needed_cap = self._resolve_dp_cap(required_cap)
 
         sig_matches = self._dp_ready and (self._dp_cache_sig == current)
         if sig_matches and self._dp_cap is not None and needed_cap <= self._dp_cap:
-            logger.debug("DP exists, not recalculating")
+            logger.debug("Reusing cached DP tables.")
             return
 
-        # If only the cap grew, keep growing monotonically so alternating
-        # k values don't ping-pong rebuilds.
         new_cap = needed_cap
         if sig_matches and self._dp_cap is not None:
-            new_cap = max(self._dp_cap, needed_cap)
+            grown = 2 * self._dp_cap
+            if self.max_k is not None:
+                grown = min(grown, self.max_k)
+            new_cap = max(needed_cap, min(grown, self.num_terminals))
 
-        # DP is being rebuilt; every downstream cache must be invalidated.
         self.clusters = {}
         self.scores = None
         self.peaks_by_rank = None
         self.alpha_by_k = {}
+        self._alpha_index = None
         self._scores_cache_sig = None
         self._score_raw_arrays = None
         self._score_raw_cap = None
         self._score_raw_base_sig = None
 
-        validate_args(self)
+        self._dp_ready = False
+        validate_clustering_parameters(self)
         self._dp_cap = new_cap
         compute_dp_table(self)
 
@@ -305,18 +327,25 @@ class PhytClust:
 
         if self.max_k is None or self.max_k < 1:
             self.max_k = max(2, ceil(self.num_terminals * self.max_k_limit))
+            self._auto_max_k = self.max_k
+
+    def _max_k_is_user_set(self) -> bool:
+        """True if ``self.max_k`` was set by the caller, not derived by a run."""
+        return self.max_k is not None and self.max_k != self._auto_max_k
 
     def _effective_max_k(self, max_k: Optional[int] = None) -> int:
         """Resolve max_k without mutating self.
 
         Precedence is:
-        1. explicit method argument ``max_k``
-        2. instance attribute ``self.max_k`` if already set
-        3. derived cap from ``max_k_limit``
+        1. explicit method argument ``max_k`` (applies to that call only)
+        2. ``self.max_k`` if the caller set it
+        3. derived cap from the current ``max_k_limit``
+
+        Method arguments apply only to the current call.
         """
         if max_k is not None:
             return min(self.num_terminals, max_k)
-        if self.max_k is not None:
+        if self._max_k_is_user_set():
             return min(self.num_terminals, self.max_k)
         return max(2, ceil(self.num_terminals * self.max_k_limit))
 
@@ -329,7 +358,7 @@ class PhytClust:
         exact_k: Optional[int] = None,
         include_scores: bool = True,
     ) -> dict[str, Any]:
-        """Build a stable run() result payload.
+        """Build the result dictionary returned by ``run()``.
 
         Canonical keys are ``k_values`` (list[int]) and ``selected_k`` (int|None).
         Legacy keys (``ks``, ``peaks``, ``k``) are retained for compatibility.
@@ -359,26 +388,47 @@ class PhytClust:
             result["k"] = int(exact_k)
         return result
 
-    def _compute_and_log_alphas(
-        self,
-        selected_ks: list[int],
-        clusters: list[IntMap],
-    ) -> list[dict[str, Any]]:
-        """Compute alpha per selected k, cache on ``self.alpha_by_k``, and print it.
+    def alpha_info(self, k: int, cmap: Optional[IntMap] = None) -> dict[str, Any]:
+        """Return alpha and branch statistics for a partition.
 
-        Alpha = mean extra-cluster branch length / mean intra-cluster branch length.
+        Cache results for ``get_clusters(k)``. Calculate supplied maps separately.
+        Reuse the tree's alpha index until the DP is rebuilt.
         """
+        self._ensure_dp(required_cap=int(k))
+        cache_result = cmap is None or cmap is self.clusters.get(int(k))
+        if cmap is None:
+            cached = self.alpha_by_k.get(int(k))
+            if cached is not None:
+                return cached
+            cmap = self.get_clusters(k)
         active_tree = (
             self._tree_wo_outgroup
             if (self.outgroup and self._tree_wo_outgroup is not None)
             else self.tree
         )
+        if self._alpha_index is None:
+            self._alpha_index = AlphaIndex(active_tree)
+        info = {
+            "k": int(k),
+            **cluster_alpha(active_tree, cmap, index=self._alpha_index),
+        }
+        if cache_result:
+            self.alpha_by_k[int(k)] = info
+        return info
+
+    def _compute_and_log_alphas(
+        self,
+        selected_ks: list[int],
+        clusters: list[IntMap],
+    ) -> list[dict[str, Any]]:
+        """Calculate and log alpha for each selected partition.
+
+        Alpha = mean extra-cluster branch length / mean intra-cluster branch length.
+        """
         details: list[dict[str, Any]] = []
         for k_val, cmap in zip(selected_ks, clusters):
-            info = cluster_alpha(active_tree, cmap)
-            info_with_k = {"k": int(k_val), **info}
-            self.alpha_by_k[int(k_val)] = info_with_k
-            details.append(info_with_k)
+            info = self.alpha_info(k_val, cmap)
+            details.append(info)
             logger.info(
                 "alpha(k=%d) = %.6g  (avg_extra=%.6g, avg_intra=%.6g, "
                 "n_extra=%d, n_intra=%d)",
@@ -389,23 +439,13 @@ class PhytClust:
                 info["n_extra_nodes"],
                 info["n_intra_nodes"],
             )
-            print(
-                f"[phytclust] alpha(k={k_val}) = {info['alpha']:.6g}  "
-                f"(avg_extra={info['avg_extra_branch_length']:.6g}, "
-                f"avg_intra={info['avg_intra_branch_length']:.6g}, "
-                f"n_extra={info['n_extra_nodes']}, "
-                f"n_intra={info['n_intra_nodes']})"
-            )
         return details
 
     @property
     def plot_config(self):
-        """Convenience accessor for plot-specific runtime config."""
+        """Return the plotting settings."""
         return self.runtime_config.plot
 
-    # ------------------------------------------------------------------ #
-    #  Single code path for retrieving / computing a k-partition          #
-    # ------------------------------------------------------------------ #
 
     def get_clusters(self, k: int, *, verbose: bool = False) -> IntMap:
         """Return the exact k-cluster partition (cached after first call)."""
@@ -414,7 +454,13 @@ class PhytClust:
         if k < 1:
             raise InvalidKError("k must be >= 1")
         self._ensure_dp(required_cap=int(k))
+        return self._clusters(k, verbose=verbose)
 
+    def _clusters(self, k: int, *, verbose: bool = False) -> IntMap:
+        """Return a cached partition or backtrack through the DP tables.
+
+        The caller must first call ``_ensure_dp`` for the largest required k.
+        """
         if k in self.clusters:
             return self.clusters[k]
 
@@ -422,13 +468,10 @@ class PhytClust:
         self.clusters[k] = cmap
         return cmap
 
-    # ------------------------------------------------------------------ #
-    #  Peak-search modes                                                  #
-    # ------------------------------------------------------------------ #
 
     def _no_peaks_fallback(self) -> list[IntMap]:
-        """When scores are empty or too short, fall back gracefully."""
-        logger.info("No meaningful peaks found.")
+        """Reset selection state and return no clusters."""
+        logger.info("No score peaks found.")
         self.k = None
         self.peaks_by_rank = []
         return []
@@ -445,23 +488,23 @@ class PhytClust:
         peak_config: Optional[PeakConfig] = None,
     ) -> list[IntMap]:
         """Internal shared implementation for global and resolution peak modes."""
+        from_user = max_k is None and self._max_k_is_user_set()
         eff_max_k = self._effective_max_k(max_k)
         self.max_k = eff_max_k
+        if not from_user:
+            self._auto_max_k = eff_max_k
 
         if eff_max_k < 4:
             raise InvalidKError("max_k must be at least 4.")
 
         self._ensure_dp(required_cap=eff_max_k)
 
-        # Scores are a pure function of (DP table, max_k, scoring flags).
-        # Recompute only if the signature has changed since the last call;
-        # this is what lets back-to-back `run(top_n=...)` calls be cheap.
         scores_sig = self._scores_signature()
         if self.scores is None or self._scores_cache_sig != scores_sig:
-            calculate_scores(self, plot=plot_scores)
+            calculate_scores(self)
             self._scores_cache_sig = scores_sig
         else:
-            logger.debug("Scores cached, not recalculating")
+            logger.debug("Reusing cached scores.")
         if self.scores is None or len(self.scores) == 0:
             return self._no_peaks_fallback()
 
@@ -472,7 +515,6 @@ class PhytClust:
         active_peak_config = peak_config or self.peak_config
 
         if resolution_on:
-            # Keep existing behavior for small trees: fallback to global peaks.
             if score_k_count < 50:
                 top = max(1, min(max(top_n, 3), score_k_count - 1))
                 return self._run_peak_mode(
@@ -510,16 +552,12 @@ class PhytClust:
                 peak_config=active_peak_config,
             )
 
-        # NOTE: do NOT clear ``self.clusters`` here. ``get_clusters(k)`` is a
-        # per-k backtrack cache, and the DP table it was built from hasn't
-        # changed (``_ensure_dp`` already cleared it on a true DP miss). Keeping
-        # the cache means back-to-back runs with different ``top_n`` only run
-        # backtrack for k values that are actually new this round.
         if (not resolution_on) and compute_all_clusters:
+            self._ensure_dp(required_cap=eff_max_k)
             for k_val in range(1, eff_max_k + 1):
                 try:
-                    self.get_clusters(k_val)
-                except MissingDPTableError:
+                    self._clusters(k_val)
+                except (MissingDPTableError, InvalidClusteringError):
                     continue
         else:
             for k_val in self.peaks_by_rank or []:
@@ -542,7 +580,7 @@ class PhytClust:
         peak_config: Optional[PeakConfig] = None,
     ) -> list[IntMap]:
         """
-        Cluster-validity index-based global peak search.
+        Select the highest-ranked peaks in the clustering scores.
 
         Returns a list of cluster maps in peak-rank order.
         """
@@ -566,7 +604,14 @@ class PhytClust:
         plot_scores: bool = True,
         peak_config: Optional[PeakConfig] = None,
     ) -> list[IntMap]:
-        """``top_n`` here means peaks per bin (default 1)."""
+        """Select up to ``top_n`` score peaks per logarithmic resolution bin.
+
+        With fewer than 50 scores, use a global search for at least three peaks.
+        """
+        if top_n < 1:
+            raise InvalidKError("top_n must be at least 1.")
+        if num_bins < 1:
+            raise ConfigurationError("num_bins must be at least 1.")
         return self._run_peak_mode(
             resolution_on=True,
             num_bins=num_bins,
@@ -576,9 +621,6 @@ class PhytClust:
             peak_config=peak_config,
         )
 
-    # ------------------------------------------------------------------ #
-    #  Unified entry point                                                #
-    # ------------------------------------------------------------------ #
 
     def run(
         self,
@@ -593,7 +635,7 @@ class PhytClust:
         peak_config: Optional[PeakConfig] = None,
     ) -> dict[str, Any]:
         """
-        Unified high-level entry point.
+        Run clustering for a fixed k or select k values from score peaks.
 
         Modes
         -----
@@ -606,7 +648,7 @@ class PhytClust:
         3. Multi-resolution peaks (one per log-bin):
             pc.run(by_resolution=True, num_bins=3)
 
-        All modes accept ``peak_config`` for tuning peak detection::
+        Peak modes accept ``peak_config`` to configure peak detection::
 
             from phytclust.config import PeakConfig
             pc.run(top_n=3, peak_config=PeakConfig(prominence_weight=0.5))
@@ -622,7 +664,6 @@ class PhytClust:
             scores : ndarray | None — score vector
             peaks : list[int] — same as ks (for convenience)
         """
-        # Apply max_k_limit override for this run only
         saved_limit = self.max_k_limit
         if max_k_limit is not None:
             self.max_k_limit = max_k_limit
@@ -654,12 +695,6 @@ class PhytClust:
         plot_scores: bool,
         peak_config: Optional[PeakConfig],
     ) -> dict[str, Any]:
-        # If the caller explicitly asks for resolution mode, ignore any
-        # lingering `self.k` from a previous run — otherwise a sequence like
-        # `pc.run(k=5); pc.run(by_resolution=True, num_bins=3)` raises
-        # "Cannot combine k with by_resolution=True" because `self.k` is
-        # silently substituted. Explicit `by_resolution=True` is a clear
-        # mode signal that should override the fallback.
         k_val = k if k is not None else (None if by_resolution else self.k)
         if k_val is not None:
             if k_val < 1:
@@ -669,7 +704,7 @@ class PhytClust:
                     "Cannot combine `k` with `by_resolution=True`."
                 )
             if top_n != 1:
-                raise ConfigurationError("`top_n` is meaningless when `k` is given.")
+                raise ConfigurationError("top_n must be 1 when k is specified.")
 
             self._ensure_dp(required_cap=int(k_val))
             cmap = self.get_clusters(k_val)
@@ -689,7 +724,7 @@ class PhytClust:
 
         if by_resolution:
             clusters = self.best_by_resolution(
-                num_bins=num_bins or self.num_bins,
+                num_bins=self.num_bins if num_bins is None else num_bins,
                 top_n=top_n,
                 max_k=max_k,
                 plot_scores=plot_scores,
@@ -701,7 +736,6 @@ class PhytClust:
                 selected_ks=list(self.peaks_by_rank or []),
             )
 
-        # global peak mode
         clusters = self.best_global(
             top_n=top_n,
             max_k=max_k,
@@ -715,9 +749,6 @@ class PhytClust:
             selected_ks=list(self.peaks_by_rank or []),
         )
 
-    # ------------------------------------------------------------------ #
-    #  Convenience wrappers                                               #
-    # ------------------------------------------------------------------ #
 
     def plot(self, results_dir: Optional[str] = None, **kwargs) -> None:
         """Plot clustering results (requires matplotlib)."""
@@ -735,7 +766,7 @@ class PhytClust:
         n: Optional[int] = None,
         output_all: bool = False,
     ) -> Optional[str]:
-        """Save clustering results to file (requires pandas).
+        """Save clustering results as a tab-separated file.
 
         ``k`` is the standard selector name. ``n`` is retained as a backwards-
         compatible alias and is only used if ``k`` is not provided.

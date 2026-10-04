@@ -98,9 +98,7 @@ and, to cite a specific version of the software, the Zenodo record:
 
 > https://doi.org/10.5281/zenodo.19731229
 
-<!-- TODO(kat): swap the preprint for the journal reference on acceptance, and
-     check this block matches CITATION.cff — which currently says 0.1.1 and needs
-     updating to 1.0.0 with the current year before tagging. -->
+<!-- Update the preprint reference after journal acceptance. -->
 
 ## License
 

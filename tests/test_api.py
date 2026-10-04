@@ -140,7 +140,7 @@ def test_run_rejects_invalid_argument_combinations():
         pc.run(k=2, by_resolution=True, plot_scores=False)
 
     with pytest.raises(
-        ConfigurationError, match="`top_n` is meaningless when `k` is given"
+        ConfigurationError, match="top_n must be 1 when k is specified"
     ):
         pc.run(k=2, top_n=2, plot_scores=False)
 

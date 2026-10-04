@@ -227,7 +227,7 @@ def merge_single_child_clades(tree: Tree, outgroup: str | None = None) -> None:
 
 def ensure_branch_lengths(tree: Tree) -> None:
     """
-    Normalize branch lengths before clustering.
+    Normalize branch lengths before clustering. Zero lengths are valid.
 
     Reject non-numeric lengths, NaN, and infinity, including at the root.
 
@@ -251,42 +251,49 @@ def ensure_branch_lengths(tree: Tree) -> None:
                 )
     clades = [cl for cl in nodes if cl is not tree.root]
 
+    n_nonpositive = 0
     n_missing = 0
     n_negative = 0
     for cl in clades:
+        if cl.branch_length is None:
+            n_missing += 1
         length = cl.branch_length or 0.0
         if length < 0.0:
             n_negative += 1
             cl.branch_length = 0.0
         if not length > 0.0:
-            n_missing += 1
+            n_nonpositive += 1
 
     if n_negative:
         logger.warning(
-            "%d of %d branches have a negative length; they are clamped to "
+            "%d of %d branches have a negative length; they are set to "
             "0.0, which can produce zero within-cluster dispersion and "
             "undefined (inf) alpha for the affected clusters.",
             n_negative,
             len(clades),
         )
 
-    if n_missing == 0:
+    if n_nonpositive == 0:
         return
 
-    if n_missing == len(clades):
+    if n_nonpositive == len(clades):
         logger.warning(
-            "Tree has no branch lengths. "
-            "PhytClust will assume all branches have length 1.0."
+            "All non-root branch lengths are zero or missing. "
+            "PhytClust will treat this tree as unweighted, using length 1.0."
         )
         for cl in clades:
             cl.branch_length = 1.0
         return
 
-    logger.warning(
-        "%d of %d branches have no positive length; they are treated as "
-        "length 0.0, which can produce zero within-cluster dispersion and "
-        "undefined (inf) alpha for the affected clusters. Provide complete "
-        "branch lengths to avoid this.",
-        n_missing,
+    if n_missing:
+        logger.warning(
+            "%d of %d branches have missing lengths; clustering treats them as 0.0.",
+            n_missing,
+            len(clades),
+        )
+    logger.info(
+        "%d of %d branches have zero or missing lengths. Zero-length branches "
+        "are valid; clusters with zero dispersion can have infinite alpha values.",
+        n_nonpositive,
         len(clades),
     )

@@ -1,44 +1,41 @@
-"""Runtime settings schema for plotting and saving.
-
-Algorithm tuning lives in `phytclust.config.peak.PeakConfig`.
-This module intentionally contains only plotting/save settings.
-"""
+"""Default plotting and save settings."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields, is_dataclass
+import warnings
 from typing import Any
+
+from ..exceptions import ConfigurationError
 
 
 @dataclass
 class ScorePlotConfig:
-    """Score-plot specific defaults."""
+    """Default sizes, colours, and axes for score plots."""
 
-    title_fontsize: int = 50
-    axis_label_fontsize: int = 35
-    tick_labelsize: int = 30
-    peak_labelsize: int = 50
-    fig_width: int = 18
-    fig_height: int = 10
-    # Clamp negative scores to 0 on the plot by default.
+    title_fontsize: int = 20
+    title_fontfamily: str = "Liberation Sans"
+    axis_label_fontsize: int = 18
+    tick_labelsize: int = 14
+    peak_labelsize: int = 16
+    bin_labelsize: int = 14
+    peak_marker: str = "o"
+    peak_markersize: int = 7
+    fig_width: float = 9
+    fig_height: float = 5
     clamp_negative_to_zero: bool = True
     log_scale_y: bool = True
     x_axis_mode: str = "log"
     log_base: float | None = None
-    # If True, save/display k>=3 score curve as primary `scores.png` output.
     prefer_unsmoothed_primary: bool = True
-    # If True, generate the secondary companion score figure.
     show_secondary_score_plot: bool = False
     colorblind_palette: list[str] | None = None
 
 
 @dataclass
 class ClusterPlotConfig:
-    """Cluster/tree rendering defaults.
-
-    The CLI and ``plot_clusters`` both resolve unset options from here.
-    Explicit keyword arguments win.
-    """
+    """Default settings for cluster plots."""
 
     cmap: str = "phytclust"
     width_scale: float = 2.0
@@ -50,11 +47,7 @@ class ClusterPlotConfig:
 
 @dataclass
 class SaveConfig:
-    """Output defaults used by save methods / CLI.
-
-    The results table is always tab-separated, so the field is ``tsv_name``
-    and the matching CLI flag is ``--tsv-name``.
-    """
+    """Default filename and outlier labels for saved results."""
 
     tsv_name: str = "phytclust_results.tsv"
     outlier: bool = True
@@ -62,7 +55,7 @@ class SaveConfig:
 
 @dataclass
 class PlotConfig:
-    """Top-level plotting config grouped by score vs tree/cluster plots."""
+    """Default settings for cluster and score plots."""
 
     cluster: ClusterPlotConfig = field(default_factory=ClusterPlotConfig)
     scores: ScorePlotConfig = field(default_factory=ScorePlotConfig)
@@ -70,29 +63,44 @@ class PlotConfig:
 
 @dataclass
 class RuntimeConfig:
-    """Runtime defaults attached to `PhytClust` for plotting/save behavior."""
+    """Plotting and save settings used by PhytClust."""
 
     plot: PlotConfig = field(default_factory=PlotConfig)
     save: SaveConfig = field(default_factory=SaveConfig)
 
 
-def _deep_update_dataclass(dc_obj: Any, updates: dict[str, Any]) -> None:
-    """Recursively apply dictionary overrides into nested dataclasses."""
-    for key, value in updates.items():
-        if not hasattr(dc_obj, key):
+def _apply_runtime_overrides(
+    config: Any, overrides: Mapping[str, Any], setting_path: str = ""
+) -> None:
+    """Apply nested overrides and warn about unknown settings."""
+    field_names = {config_field.name for config_field in fields(config)}
+    for name, value in overrides.items():
+        full_name = f"{setting_path}.{name}" if setting_path else str(name)
+        if name not in field_names:
+            warnings.warn(
+                f"Unknown runtime setting {full_name!r}; ignored.",
+                UserWarning,
+                stacklevel=3,
+            )
             continue
-        cur = getattr(dc_obj, key)
-        if hasattr(cur, "__dataclass_fields__") and isinstance(value, dict):
-            _deep_update_dataclass(cur, value)
+        current_value = getattr(config, name)
+        if is_dataclass(current_value):
+            if not isinstance(value, Mapping):
+                raise ConfigurationError(f"{full_name} must be a mapping of settings.")
+            _apply_runtime_overrides(current_value, value, full_name)
+        elif isinstance(value, Mapping):
+            raise ConfigurationError(f"{full_name} must be a value, not a mapping.")
         else:
-            setattr(dc_obj, key, value)
+            setattr(config, name, value)
 
 
 def build_runtime_config(
-    overrides: dict[str, Any] | None = None,
+    overrides: Mapping[str, Any] | None = None,
 ) -> RuntimeConfig:
-    """Construct a typed runtime config, optionally applying overrides."""
-    cfg = RuntimeConfig()
-    if overrides:
-        _deep_update_dataclass(cfg, overrides)
-    return cfg
+    """Create plotting and save settings with optional nested overrides."""
+    config = RuntimeConfig()
+    if overrides is not None:
+        if not isinstance(overrides, Mapping):
+            raise ConfigurationError("Runtime overrides must be a mapping of settings.")
+        _apply_runtime_overrides(config, overrides)
+    return config

@@ -452,6 +452,18 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: 0.7, from config file or PeakConfig if unset).",
     )
     parser.add_argument(
+        "--peak-partition-preference",
+        choices=("none", "fewer_outliers", "balanced"),
+        default=None,
+        help="Rank detected peaks using singleton counts or cluster-size balance.",
+    )
+    parser.add_argument(
+        "--peak-partition-weight",
+        type=float,
+        default=None,
+        help="Partition preference weight from 0 to 1 (default: 0.5).",
+    )
+    parser.add_argument(
         "--exclude-k2",
         dest="exclude_k2",
         action="store_true",
@@ -486,7 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="prefer_fewer_outliers",
         default=False,
-        help="At fixed k, minimise outlier count first, then break ties by raw cost.",
+        help="At fixed k, minimise outlier count first, then break ties by raw cost. Without a size threshold, outliers are singleton clusters.",
     )
     parser.add_argument(
         "--polytomy-mode",
@@ -592,6 +604,10 @@ def _run_cli(argv=None) -> int:
         cli_peak_overrides = {}
         if args.prominence_weight is not None:
             cli_peak_overrides["prominence_weight"] = args.prominence_weight
+        if args.peak_partition_preference is not None:
+            cli_peak_overrides["partition_preference"] = args.peak_partition_preference
+        if args.peak_partition_weight is not None:
+            cli_peak_overrides["partition_weight"] = args.peak_partition_weight
         if args.exclude_k2:
             cli_peak_overrides["exclude_k2"] = True
         peak_config = (

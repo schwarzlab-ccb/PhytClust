@@ -1,4 +1,5 @@
 import logging
+from collections import Counter
 from typing import Optional, Any
 
 import numpy as np
@@ -11,64 +12,50 @@ from ..exceptions import (
 from ..viz.scores import plot_scores as _plot_scores
 from .bins import define_bins as _define_bins
 from ..config import RANKING_MODES, PeakConfig
+from ..utils.traversal import nonterminals, terminals
 
 logger = logging.getLogger("phytclust")
 
 
-def _find_zero_length_split_k(pc, max_k: int, eps: float = 1e-12) -> Optional[int]:
-    """
-    Find the smallest k where the optimal partition splits terminals
-    connected by a zero-length branch into different clusters.
+def _first_zero_length_pair_split(
+    clustering, max_k: int, eps: float = 1e-12
+) -> Optional[int]:
+    """Find the first observed split of a two-leaf subtree on a zero-length edge.
 
-    Returns that k value, or None if no zero-length split occurs up to max_k.
-
-    Notes
-    -----
-    This is a diagnostic / warning helper only. It must not dominate runtime,
-    so:
-
-    1. If the user already set ``pc.no_split_zero_length=True``, the DP has
-       already forbidden any such split; return ``None`` immediately.
-    2. Otherwise walk k in order and return as soon as the first split is
-       observed (early exit). The common case is a small k, so the loop
-       almost never runs to ``max_k``.
-    3. Cluster lookups go through ``pc.get_clusters(k)``, which hits the
-       per-k backtrack cache on ``pc.clusters`` and cooperates with the
-       cache invalidation in ``_ensure_dp``.
-    """
-    # Splits are structurally forbidden, so there is nothing to find.
-    if getattr(pc, "no_split_zero_length", False):
+    Check adjacent feasible cluster counts up to max_k or the diagnostic
+    search limit, whichever is smaller. This does not detect every zero-length split."""
+    if getattr(clustering, "no_split_zero_length", False):
         return None
 
-    # Zero-length branches whose subtree holds exactly two terminals.
-    active_tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
+    active_tree = (
+        clustering._tree_wo_outgroup if clustering.outgroup else clustering.tree
+    )
     zero_length_pairs: list[tuple] = []
-    for node in active_tree.get_nonterminals():
+    for node in nonterminals(active_tree.root):
         for child in node.clades:
-            bl = child.branch_length or 0.0
-            if bl <= eps:
-                cached = getattr(pc, "name_leaves_per_node", None)
+            branch_length = child.branch_length or 0.0
+            if branch_length <= eps:
+                cached = getattr(clustering, "name_leaves_per_node", None)
                 terms = cached.get(child) if cached is not None else None
                 if terms is None:
-                    terms = list(child.get_terminals())
+                    terms = list(terminals(child))
                 if len(terms) == 2:
                     zero_length_pairs.append((terms[0], terms[1]))
 
     if not zero_length_pairs:
         return None
 
-    # Early-exit on the first split; capped because the warning is only
-    # actionable at small k and scanning further dominates runtime.
-    search_cap = int(getattr(pc, "zero_length_split_max_k", 100))
+    search_cap = int(getattr(clustering, "zero_length_split_max_k", 100))
     effective_max_k = min(max_k, search_cap)
+    clustering._ensure_dp(required_cap=effective_max_k)
     try:
-        prev = pc.get_clusters(1)
+        prev = clustering._clusters(1)
     except (ValueError, RuntimeError, InvalidClusteringError, MissingDPTableError):
         prev = None
 
     for k in range(2, effective_max_k + 1):
         try:
-            cur = pc.get_clusters(k)
+            cur = clustering._clusters(k)
         except (ValueError, RuntimeError, InvalidClusteringError, MissingDPTableError):
             prev = None
             continue
@@ -91,38 +78,47 @@ def _find_zero_length_split_k(pc, max_k: int, eps: float = 1e-12) -> Optional[in
     return None
 
 
-def _single_cluster_score(
-    pc, clusters: Optional[dict[Any, Any]] = None, k: Optional[int] = None
+def _score_cluster_count(
+    clustering, clusters: Optional[dict[Any, Any]] = None, k: Optional[int] = None
 ):
-    if not pc.max_k or pc.max_k <= 0:
+    """Return cost, relative cost reduction, and score for one cluster count.
+
+    A supplied map selects its number of clusters; its membership is not scored."""
+    if not clustering.max_k or clustering.max_k <= 0:
         raise ConfigurationError(
             "max_k must be set and positive to compute cluster scores."
         )
 
-    active_tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
+    active_tree = (
+        clustering._tree_wo_outgroup if clustering.outgroup else clustering.tree
+    )
     root = active_tree.root
-    root_id = pc.node_to_id[root]
+    root_id = clustering.node_to_id[root]
 
-    use_penalized_beta = getattr(pc, "use_penalized_beta_for_scoring", False)
-    dp_row = pc.dp_table[root_id] if use_penalized_beta else pc.raw_dp_table[root_id]
+    use_penalized_beta = getattr(clustering, "use_penalized_beta_for_scoring", False)
+    dp_row = (
+        clustering.dp_table[root_id]
+        if use_penalized_beta
+        else clustering.raw_dp_table[root_id]
+    )
 
     if dp_row is None:
         raise MissingDPTableError("Root DP row missing.")
 
     dp_row = np.asarray(dp_row, dtype=float)
-    pc.beta_1 = dp_row[0]
-    num_terminals = pc.num_terminals
+    clustering.beta_1 = dp_row[0]
+    num_terminals = clustering.num_terminals
 
     if clusters is not None:
         num_clusters = len(set(clusters.values()))
-        if num_clusters < 1 or num_clusters > pc.max_k:
+        if num_clusters < 1 or num_clusters > clustering.max_k:
             return (float("inf"), float("inf"), float("inf"))
         if num_clusters - 1 >= len(dp_row):
             return (float("inf"), float("inf"), float("inf"))
         beta = dp_row[num_clusters - 1]
 
     elif k is not None:
-        if k < 1 or k > pc.max_k or k - 1 >= len(dp_row):
+        if k < 1 or k > clustering.max_k or k - 1 >= len(dp_row):
             return (float("inf"), float("inf"), float("inf"))
         num_clusters = k
         beta = dp_row[k - 1]
@@ -132,73 +128,73 @@ def _single_cluster_score(
             "Either 'clusters' or 'k' must be provided to compute the score."
         )
 
-    if np.isinf(beta):
+    if not np.isfinite(beta):
         return (beta, float("inf"), 0.0)
 
     if beta == 0:
         return (beta, float("inf"), 0.0)
 
-    # Optional stabilization: floor denominator to avoid late-k explosion
-    # when beta approaches 0 on large trees.
-    beta_floor_frac = float(getattr(pc, "score_beta_floor_frac", 0.0) or 0.0)
-    beta_floor_abs = float(getattr(pc, "score_beta_floor_abs", 0.0) or 0.0)
-    beta_floor = max(beta_floor_abs, beta_floor_frac * float(pc.beta_1))
+    relative_cost_floor = float(
+        getattr(clustering, "score_beta_floor_frac", 0.0) or 0.0
+    )
+    absolute_cost_floor = float(getattr(clustering, "score_beta_floor_abs", 0.0) or 0.0)
+    beta_floor = max(
+        absolute_cost_floor, relative_cost_floor * float(clustering.beta_1)
+    )
     beta_denom = max(float(beta), beta_floor)
 
-    beta_ratios = (pc.beta_1 - beta) / beta_denom
-    # (n - k)/k resolution weight (not textbook CH's (n - k)/(k - 1)); see the
-    # note in `_vectorised_dp_row_scores`. Keep both forms consistent.
-    # num_clusters is guaranteed >= 1 here (the < 1 case returned inf above).
+    beta_ratios = (clustering.beta_1 - beta) / beta_denom
     norm_ratios = (num_terminals - num_clusters) / float(num_clusters)
 
     if not np.isfinite(beta_ratios) or not np.isfinite(norm_ratios):
-        score = float("inf")
+        score = 0.0
     else:
         score = beta_ratios * norm_ratios
 
     return (beta, beta_ratios, score)
 
 
-def _vectorised_dp_row_scores(pc) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Vectorised equivalent of looping `_single_cluster_score(pc, k=k)`
-    over k = 1..max_k. Returns (betas, beta_ratios, scores) of length
-    max_k. Same edge-case semantics as the per-k version:
+def _score_all_cluster_counts(clustering) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return costs, cost-reduction ratios, and scores for k = 1 through max_k.
 
-      - k beyond DP row length → (inf, inf, inf)
-      - beta non-finite or zero → (beta, inf, 0)
-      - otherwise               → (beta, br, br * norm)
-    """
-    active_tree = pc._tree_wo_outgroup if pc.outgroup else pc.tree
-    root_id = pc.node_to_id[active_tree.root]
+    Zero or non-finite costs have zero score. Counts beyond the table have
+    infinite cost and score."""
+    active_tree = (
+        clustering._tree_wo_outgroup if clustering.outgroup else clustering.tree
+    )
+    root_id = clustering.node_to_id[active_tree.root]
 
-    use_pen = getattr(pc, "use_penalized_beta_for_scoring", False)
-    dp_row = pc.dp_table[root_id] if use_pen else pc.raw_dp_table[root_id]
+    use_penalized_cost = getattr(clustering, "use_penalized_beta_for_scoring", False)
+    dp_row = (
+        clustering.dp_table[root_id]
+        if use_penalized_cost
+        else clustering.raw_dp_table[root_id]
+    )
     if dp_row is None:
         raise MissingDPTableError("Root DP row missing.")
 
     dp_row = np.asarray(dp_row, dtype=float)
-    pc.beta_1 = float(dp_row[0])
-    num_terminals = pc.num_terminals
-    max_k = int(pc.max_k)
+    clustering.beta_1 = float(dp_row[0])
+    num_terminals = clustering.num_terminals
+    max_k = int(clustering.max_k)
 
-    beta_floor_frac = float(getattr(pc, "score_beta_floor_frac", 0.0) or 0.0)
-    beta_floor_abs = float(getattr(pc, "score_beta_floor_abs", 0.0) or 0.0)
-    beta_floor = max(beta_floor_abs, beta_floor_frac * pc.beta_1)
+    relative_cost_floor = float(
+        getattr(clustering, "score_beta_floor_frac", 0.0) or 0.0
+    )
+    absolute_cost_floor = float(getattr(clustering, "score_beta_floor_abs", 0.0) or 0.0)
+    beta_floor = max(absolute_cost_floor, relative_cost_floor * clustering.beta_1)
 
-    n_in = min(max_k, len(dp_row))
+    available_cost_count = min(max_k, len(dp_row))
     betas = np.full(max_k, np.inf, dtype=float)
-    betas[:n_in] = dp_row[:n_in]
+    betas[:available_cost_count] = dp_row[:available_cost_count]
 
     ks = np.arange(1, max_k + 1, dtype=float)
-    # (n-k)/k, not textbook CH's (n-k)/(k-1): a resolution weight for ranking,
-    # finite at k=1. Changing it shifts peak selection — keep in step with
-    # _single_cluster_score.
     norm_ratios = (num_terminals - ks) / ks
 
     edge = ~np.isfinite(betas) | (betas == 0)
     with np.errstate(invalid="ignore", divide="ignore"):
         beta_denom = np.maximum(betas, beta_floor)
-        beta_ratios_full = (pc.beta_1 - betas) / beta_denom
+        beta_ratios_full = (clustering.beta_1 - betas) / beta_denom
         scores_full = beta_ratios_full * norm_ratios
 
     beta_ratios = np.where(edge, np.inf, beta_ratios_full)
@@ -208,37 +204,30 @@ def _vectorised_dp_row_scores(pc) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         scores_full,
     )
 
-    # k beyond dp_row length: original returned (inf, inf, inf).
-    # Edge handling above set scores=0 for those slots (since betas=inf).
-    # Restore inf so the downstream invalid_mask filters them out.
-    if n_in < max_k:
-        scores[n_in:] = np.inf
+    if available_cost_count < max_k:
+        scores[available_cost_count:] = np.inf
 
     return betas, beta_ratios, scores
 
 
-def _vectorised_dp_row_scores_cached(
-    pc,
+def _cached_cluster_count_scores(
+    clustering,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Cached wrapper around ``_vectorised_dp_row_scores``.
+    """Reuse score arrays for the current DP tables and cost-floor settings.
 
-    The raw (betas, beta_ratios, scores) vectors are pure local functions of
-    ``dp_row`` and the scoring flags; entry ``i`` does not depend on any
-    later entry. So a vector computed at max_k = K can serve any request for
-    max_k' <= K by slicing the prefix. We cache at the largest max_k seen
-    within a stable (DP signature, DP cap, scoring flag) base, and
-    recompute on a miss.
-    """
-    requested = int(pc.max_k)
+    A cached larger range can serve a smaller request by copying its prefix."""
+    requested = int(clustering.max_k)
     base_sig = (
-        pc._dp_cache_sig,
-        pc._dp_cap,
-        bool(getattr(pc, "use_penalized_beta_for_scoring", False)),
+        clustering._dp_cache_sig,
+        clustering._dp_cap,
+        bool(getattr(clustering, "use_penalized_beta_for_scoring", False)),
+        float(getattr(clustering, "score_beta_floor_frac", 0.0) or 0.0),
+        float(getattr(clustering, "score_beta_floor_abs", 0.0) or 0.0),
     )
 
-    cached = pc._score_raw_arrays
-    cached_sig = pc._score_raw_base_sig
-    cached_cap = pc._score_raw_cap
+    cached = clustering._score_raw_arrays
+    cached_sig = clustering._score_raw_base_sig
+    cached_cap = clustering._score_raw_cap
 
     if (
         cached is not None
@@ -253,74 +242,77 @@ def _vectorised_dp_row_scores_cached(
             scores[:requested].copy(),
         )
 
-    betas, ratios, scores = _vectorised_dp_row_scores(pc)
+    betas, ratios, scores = _score_all_cluster_counts(clustering)
 
-    pc._score_raw_arrays = (betas.copy(), ratios.copy(), scores.copy())
-    pc._score_raw_cap = requested
-    pc._score_raw_base_sig = base_sig
+    clustering._score_raw_arrays = (betas.copy(), ratios.copy(), scores.copy())
+    clustering._score_raw_cap = requested
+    clustering._score_raw_base_sig = base_sig
     return betas, ratios, scores
 
 
-def calculate_scores(pc, plot: bool = False) -> None:
-    if pc.k is not None:
+def calculate_scores(clustering) -> None:
+    """Calculate elbow-weighted scores while preserving cluster-count positions."""
+    if clustering.k is not None:
         from .dp import cluster_map
 
-        cmap = cluster_map(pc, pc.k)
-        beta, br, sc = _single_cluster_score(pc, clusters=cmap)
+        cmap = cluster_map(clustering, clustering.k)
+        beta, cost_reduction_ratio, score = _score_cluster_count(
+            clustering, clusters=cmap
+        )
         beta_values = np.array([beta], dtype=float)
-        den_list = np.array([br], dtype=float)
-        scores = np.array([sc], dtype=float)
+        cost_reduction_ratios = np.array([cost_reduction_ratio], dtype=float)
+        scores = np.array([score], dtype=float)
     else:
-        if not pc.max_k or pc.max_k <= 0:
+        if not clustering.max_k or clustering.max_k <= 0:
             raise ConfigurationError(
                 "max_k must be set and positive to compute DP-based scores."
             )
-        beta_values, den_list, scores = _vectorised_dp_row_scores_cached(pc)
+        beta_values, cost_reduction_ratios, scores = _cached_cluster_count_scores(
+            clustering
+        )
 
     scores[scores < 0] = 0
     beta_values[beta_values < 0] = 0
-    beta_values = np.nan_to_num(beta_values, nan=0.0, posinf=0.0, neginf=0.0)
+    finite_costs = np.isfinite(beta_values)
 
     n = len(beta_values)
     elbow_scores = np.zeros(n, dtype=float)
     if n >= 3:
-        # Use drop magnitudes (not signed diffs) and suppress unstable tail ratios
-        # where beta improvements become numerically tiny.
-        drops = np.maximum(0.0, -np.diff(beta_values))
+        drops = np.zeros(n - 1, dtype=float)
+        adjacent_finite = finite_costs[:-1] & finite_costs[1:]
+        drops[adjacent_finite] = np.maximum(
+            0.0, beta_values[:-1][adjacent_finite] - beta_values[1:][adjacent_finite]
+        )
         prev_drop = drops[:-1]
         next_drop = drops[1:]
 
-        drop_eps = 1e-10
+        drop_eps = 1e-12 * (max(float(beta_values[0]), 0.0) if finite_costs[0] else 0.0)
         stable = (prev_drop > drop_eps) & (next_drop > drop_eps)
         ratios = np.zeros_like(prev_drop)
         ratios[stable] = prev_drop[stable] / next_drop[stable]
 
-        # Prevent tiny-denominator explosions from dominating peak ranking.
         ratios = np.clip(ratios, 0.0, 50.0)
         elbow_scores[1 : n - 1] = ratios
 
-    # Invariant (load-bearing): invalid entries only ever occur at the TAIL
-    # (out-of-range k), never in the interior — interior-infeasible k are mapped
-    # to score 0.0, not nan/inf. Downstream (find_score_peaks) relies on
-    # scores[i] == k=i+1 after this compaction; an interior nan/inf here would
-    # silently shift every k mapping, so keep infeasible-interior scores finite.
     invalid_mask = (
         np.isnan(scores)
         | np.isinf(scores)
         | np.isnan(elbow_scores)
         | np.isinf(elbow_scores)
     )
-    valid_mask = ~invalid_mask
+    # Keep array positions aligned with k; impossible partitions get zero score.
+    scores[invalid_mask | ~finite_costs] = 0.0
+    valid_mask = np.ones(n, dtype=bool)
 
     scores_valid = scores[valid_mask]
     beta_valid = beta_values[valid_mask]
-    den_valid = den_list[valid_mask]
+    den_valid = cost_reduction_ratios[valid_mask]
     elbow_valid = elbow_scores[valid_mask]
 
     if len(scores_valid) == 0:
-        pc.scores = np.array([], dtype=float)
-        pc.beta_values = np.array([], dtype=float)
-        pc.norm_ratios = np.array([], dtype=float)
+        clustering.scores = np.array([], dtype=float)
+        clustering.beta_values = np.array([], dtype=float)
+        clustering.norm_ratios = np.array([], dtype=float)
         return
 
     combined_scores = np.nan_to_num(
@@ -338,9 +330,9 @@ def calculate_scores(pc, plot: bool = False) -> None:
     beta_valid = beta_valid[:last_useful]
     den_valid = den_valid[:last_useful]
 
-    pc.scores = combined_scores
-    pc.beta_values = beta_valid
-    pc.norm_ratios = den_valid
+    clustering.scores = combined_scores
+    clustering.beta_values = beta_valid
+    clustering.norm_ratios = den_valid
 
 
 def _rank_peaks(
@@ -358,37 +350,32 @@ def _rank_peaks(
     score_min, score_max = min(all_sc), max(all_sc)
 
     ranked_data = []
-    for pk, prom, sc in peak_data:
+    for cluster_count, prominence, score in peak_data:
         if ranking_mode == "raw":
-            prom_norm = prom
-            score_norm = sc
-            base_metric = prom
-            combined_metric = base_metric
+            prom_norm = score_norm = None
+            combined_metric = prominence
         else:
             prom_norm = (
-                (prom - prom_min) / (prom_max - prom_min)
+                (prominence - prom_min) / (prom_max - prom_min)
                 if prom_max > prom_min
                 else 1.0
             )
             score_norm = (
-                (sc - score_min) / (score_max - score_min)
+                (score - score_min) / (score_max - score_min)
                 if score_max > score_min
                 else 1.0
             )
-            base_metric = (
-                prominence_weight * prom_norm
-                + (1 - prominence_weight) * score_norm
+            combined_metric = (
+                prominence_weight * prom_norm + (1 - prominence_weight) * score_norm
             )
-            combined_metric = base_metric
 
         ranked_data.append(
             {
-                "k": pk,
-                "prominence": prom,
-                "score": sc,
-                "prom_norm": prom_norm if ranking_mode == "adjusted" else None,
-                "score_norm": score_norm if ranking_mode == "adjusted" else None,
-                "base_metric": base_metric,
+                "k": cluster_count,
+                "prominence": prominence,
+                "score": score,
+                "prom_norm": prom_norm,
+                "score_norm": score_norm,
                 "combined_metric": combined_metric,
             }
         )
@@ -397,21 +384,52 @@ def _rank_peaks(
     return ranked_data
 
 
+def _rank_peak_partitions(clustering, ranked_data, settings):
+    """Blend peak strength with singleton avoidance or cluster-size balance."""
+    if settings.partition_preference == "none" or settings.partition_weight == 0:
+        return ranked_data
+    maximum_strength = max(item["combined_metric"] for item in ranked_data)
+    weight = settings.partition_weight
+    for item in ranked_data:
+        partition = clustering._clusters(int(item["k"]))
+        sizes = list(Counter(partition.values()).values())
+        cell_count = sum(sizes)
+        singleton_count = sum(size == 1 for size in sizes)
+        singleton_fraction = singleton_count / cell_count
+        # Effective cluster count divided by k: one for equally sized clusters.
+        balance = cell_count**2 / (len(sizes) * sum(size**2 for size in sizes))
+        quality = 1 - singleton_fraction
+        if settings.partition_preference == "balanced":
+            quality *= balance
+        strength = (
+            item["combined_metric"] / maximum_strength if maximum_strength > 0 else 1.0
+        )
+        item.update(
+            singleton_count=singleton_count,
+            singleton_fraction=singleton_fraction,
+            cluster_sizes=sorted(sizes, reverse=True),
+            size_balance=balance,
+            partition_quality=quality,
+            ranking_metric=(1 - weight) * strength + weight * quality,
+        )
+    return sorted(ranked_data, key=lambda item: item["ranking_metric"], reverse=True)
+
+
 def _plot_raw(
     peaks_to_plot: list,
     *,
-    pc,
+    clustering,
     plot: bool,
     scores: np.ndarray,
     k_end: int,
     resolution_on: bool,
     num_bins: int,
 ) -> None:
-    """Build and assign score plots onto pc.plot_of_scores / pc.plot_of_raw_scores."""
+    """Build and assign score plots onto clustering.plot_of_scores / clustering.plot_of_raw_scores."""
     if not plot:
         return
 
-    scores_cfg = getattr(getattr(pc, "plot_config", None), "scores", None)
+    scores_cfg = getattr(getattr(clustering, "plot_config", None), "scores", None)
     prefer_unsmoothed_primary = bool(
         getattr(scores_cfg, "prefer_unsmoothed_primary", True)
     )
@@ -421,8 +439,8 @@ def _plot_raw(
 
     if resolution_on:
         primary_arr = scores[1:k_end].copy()
-        pc.plot_of_scores = _plot_scores(
-            pc,
+        clustering.plot_of_scores = _plot_scores(
+            clustering,
             scores_subset=primary_arr,
             peaks=peaks_to_plot,
             k_start=2,
@@ -432,8 +450,8 @@ def _plot_raw(
         )
         if show_secondary_score_plot:
             secondary_arr = scores[2:k_end].copy()
-            pc.plot_of_raw_scores = _plot_scores(
-                pc,
+            clustering.plot_of_raw_scores = _plot_scores(
+                clustering,
                 scores_subset=secondary_arr,
                 peaks=peaks_to_plot,
                 k_start=3,
@@ -442,13 +460,13 @@ def _plot_raw(
                 num_bins=num_bins,
             )
         else:
-            pc.plot_of_raw_scores = None
+            clustering.plot_of_raw_scores = None
         return
 
     if prefer_unsmoothed_primary:
         primary_arr = scores[2:k_end].copy()
-        pc.plot_of_scores = _plot_scores(
-            pc,
+        clustering.plot_of_scores = _plot_scores(
+            clustering,
             scores_subset=primary_arr,
             peaks=peaks_to_plot,
             k_start=3,
@@ -458,8 +476,8 @@ def _plot_raw(
         )
         if show_secondary_score_plot:
             secondary_arr = scores[1:k_end].copy()
-            pc.plot_of_raw_scores = _plot_scores(
-                pc,
+            clustering.plot_of_raw_scores = _plot_scores(
+                clustering,
                 scores_subset=secondary_arr,
                 peaks=peaks_to_plot,
                 k_start=2,
@@ -468,11 +486,11 @@ def _plot_raw(
                 num_bins=num_bins,
             )
         else:
-            pc.plot_of_raw_scores = None
+            clustering.plot_of_raw_scores = None
     else:
         primary_arr = scores[1:k_end].copy()
-        pc.plot_of_scores = _plot_scores(
-            pc,
+        clustering.plot_of_scores = _plot_scores(
+            clustering,
             scores_subset=primary_arr,
             peaks=peaks_to_plot,
             k_start=2,
@@ -482,8 +500,8 @@ def _plot_raw(
         )
         if show_secondary_score_plot:
             secondary_arr = scores[2:k_end].copy()
-            pc.plot_of_raw_scores = _plot_scores(
-                pc,
+            clustering.plot_of_raw_scores = _plot_scores(
+                clustering,
                 scores_subset=secondary_arr,
                 peaks=peaks_to_plot,
                 k_start=3,
@@ -492,11 +510,11 @@ def _plot_raw(
                 num_bins=num_bins,
             )
         else:
-            pc.plot_of_raw_scores = None
+            clustering.plot_of_raw_scores = None
 
 
 def find_score_peaks(
-    pc,
+    clustering,
     scores: Optional[np.ndarray] = None,
     global_peaks: int = 3,
     peaks_per_bin: int = 1,
@@ -507,41 +525,42 @@ def find_score_peaks(
     plot: bool = True,
     peak_config: Optional[PeakConfig] = None,
 ) -> list[int]:
+    """Find and rank score peaks within the inclusive k_start to k_end range."""
     from scipy.signal import find_peaks
 
-    cfg = peak_config or PeakConfig()
-    cfg.validate()  # overlays mutate an already-built instance
+    peak_settings = peak_config or PeakConfig()
+    peak_settings.validate()
+    clustering.peak_ranking_details = []
 
-    # Unpack config
-    min_k = cfg.min_k
-    min_prominence = cfg.min_prominence
-    use_log_peak_input = bool(getattr(cfg, "use_log_peak_input", False))
-    log_peak_offset = float(getattr(cfg, "log_peak_offset", 1e-12))
-    use_relative_prominence = bool(getattr(cfg, "use_relative_prominence", False))
-    min_relative_prominence = getattr(cfg, "min_relative_prominence", None)
-    prominence_k_power = getattr(cfg, "prominence_k_power", 0.0)
-    ranking_mode = cfg.ranking_mode
-    prominence_weight = cfg.prominence_weight
-    boundary_window_size = cfg.boundary_window_size
-    boundary_ratio_threshold = cfg.boundary_ratio_threshold
-    resolution_fallback_mode = cfg.resolution_fallback_mode
-    exclude_k2 = bool(getattr(cfg, "exclude_k2", False))
+    min_k = peak_settings.min_k
+    min_prominence = peak_settings.min_prominence
+    use_log_peak_input = bool(getattr(peak_settings, "use_log_peak_input", False))
+    log_peak_offset = getattr(peak_settings, "log_peak_offset", 1e-12)
+    use_relative_prominence = bool(
+        getattr(peak_settings, "use_relative_prominence", False)
+    )
+    min_relative_prominence = getattr(peak_settings, "min_relative_prominence", None)
+    prominence_k_power = getattr(peak_settings, "prominence_k_power", 0.0)
+    ranking_mode = peak_settings.ranking_mode
+    prominence_weight = peak_settings.prominence_weight
+    boundary_window_size = peak_settings.boundary_window_size
+    boundary_ratio_threshold = peak_settings.boundary_ratio_threshold
+    resolution_fallback_mode = peak_settings.resolution_fallback_mode
+    exclude_k2 = bool(getattr(peak_settings, "exclude_k2", False))
     if exclude_k2:
-        # Force the boundary candidate, interior detector, and resolution
-        # fallback to all treat k=2 as out-of-range in a single place.
         min_k = max(min_k, 3)
 
     if scores is None:
-        scores = pc.scores
+        scores = clustering.scores
 
     if scores is None or len(scores) == 0:
-        pc.peaks_by_rank = []
-        pc.resolution_info = None
-        pc.peaks_by_resolution = None
+        clustering.peaks_by_rank = []
+        clustering.resolution_info = None
+        clustering.peaks_by_resolution = None
 
         if plot:
-            pc.plot_of_scores = _plot_scores(
-                pc,
+            clustering.plot_of_scores = _plot_scores(
+                clustering,
                 scores_subset=np.array([], dtype=float),
                 peaks=[],
                 k_start=1,
@@ -549,19 +568,18 @@ def find_score_peaks(
                 num_bins=num_bins,
             )
 
-        logger.info("PhytClust did not find any clusters.")
+        logger.info("No score peaks found.")
         return []
 
     scores = np.asarray(scores, dtype=float)
     scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Detect the first k that splits a zero-length branch
-    zero_split_k = _find_zero_length_split_k(pc, len(scores))
-    pc.zero_length_split_k = zero_split_k
+    zero_split_k = _first_zero_length_pair_split(clustering, len(scores))
+    clustering.zero_length_split_k = zero_split_k
     if zero_split_k is not None:
         logger.warning(
-            "At k=%d, the partition first splits terminals connected by a "
-            "zero-length branch. Peaks at k>=%d may not be meaningful.",
+            "At k=%d, leaves in a two-leaf subtree on a zero-length edge "
+            "are assigned to different clusters. Check peaks at k >= %d.",
             zero_split_k,
             zero_split_k,
         )
@@ -576,16 +594,15 @@ def find_score_peaks(
         raise InvalidClusteringError(
             f"At least two scores are required to find peaks. scores = {scores}"
         )
-    # Defensive normalization for callers that pass k values instead of indices,
-    # or when the feasible score vector is very short under strict constraints.
-    k_start = int(max(0, min(k_start, len(scores) - 2)))
-    k_end = int(max(k_start + 1, min(k_end, len(scores))))
+    k_start = max(1, int(k_start))
+    k_end = min(int(k_end), len(scores))
+    min_k = max(min_k, k_start)
+    allow_k2 = not exclude_k2 and min_k <= 2 <= k_end
 
-    # Convenience: bind shared keyword args for _plot_raw calls in this function.
     def _emit_plot(peaks_to_plot):
         _plot_raw(
             peaks_to_plot,
-            pc=pc,
+            clustering=clustering,
             plot=plot,
             scores=scores,
             k_end=k_end,
@@ -593,66 +610,50 @@ def find_score_peaks(
             num_bins=num_bins,
         )
 
-    # Special case: only meaningful score is at k=2
-    if (
-        not exclude_k2
-        and len(scores) > 1
-        and nonzero_idx.size == 1
-        and nonzero_idx[0] == 1
-    ):
-        pc.peaks_by_rank = [2]
+    if allow_k2 and len(scores) > 1 and nonzero_idx.size == 1 and nonzero_idx[0] == 1:
+        clustering.peaks_by_rank = [2]
         if not resolution_on:
-            pc.resolution_info = None
-            pc.peaks_by_resolution = None
+            clustering.resolution_info = None
+            clustering.peaks_by_resolution = None
         else:
-            pc.resolution_info = {
+            clustering.resolution_info = {
                 "special_case": [(2, float(scores[1]), float(scores[1]), 1.0)]
             }
-            pc.peaks_by_resolution = {"special_case": [2]}
+            clustering.peaks_by_resolution = {"special_case": [2]}
         _emit_plot([2])
-        return pc.peaks_by_rank
+        return clustering.peaks_by_rank
 
-    # ----------------------------------------------------------------
-    # 1) Boundary candidate: k=2 via right-window median comparison
-    # ----------------------------------------------------------------
-    peak_data = []  # list of (k, prominence, score)
+    peak_data = []
 
-    if len(scores) > 2 and min_k <= 2:
-        score_k2 = scores[1]  # index 1 = k=2
-        w = min(boundary_window_size, len(scores) - 2)  # don't exceed array
-        right_window = scores[2 : 2 + w]  # k=3 onward
+    if len(scores) > 2 and allow_k2:
+        score_k2 = scores[1]
+        w = min(boundary_window_size, len(scores) - 2)
+        right_window = scores[2 : 2 + w]
 
         if len(right_window) > 0 and score_k2 > right_window[0]:
             window_baseline = float(np.median(right_window))
             window_ratio = score_k2 / (window_baseline + eps)
 
             if window_ratio > boundary_ratio_threshold:
-                # Use the excess over baseline as a prominence-like measure
                 boundary_prom = score_k2 - window_baseline
                 if use_relative_prominence:
                     boundary_prom = (score_k2 + eps) / (window_baseline + eps)
 
-                if min_relative_prominence is None or boundary_prom >= float(
-                    min_relative_prominence
+                if (
+                    not use_relative_prominence
+                    or min_relative_prominence is None
+                    or boundary_prom >= float(min_relative_prominence)
                 ):
                     peak_data.append((2, boundary_prom, score_k2))
 
-    # ----------------------------------------------------------------
-    # 2) Interior peaks: find_peaks on k>=3 subarray (index 2 onward)
-    # ----------------------------------------------------------------
-    interior_start = 2  # array index for k=3
+    interior_start = 2
     interior_scores = scores[interior_start:k_end].astype(float)
     interior_scores = np.nan_to_num(interior_scores, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Trim trailing zeros
-    if len(interior_scores) > 1 and interior_scores[-1] <= 0:
-        peak_input = interior_scores[:-1]
-    else:
-        peak_input = interior_scores
+    # A trailing zero supplies the descending side of the preceding peak.
+    peak_input = interior_scores
 
     if use_log_peak_input:
-        # log-domain peak search suppresses multiplicative tail inflation.
-        # Scores are non-negative; clamp defensively for numerical safety.
         peak_input = np.log(np.maximum(peak_input, 0.0) + max(log_peak_offset, 1e-15))
 
     if len(peak_input) >= 2:
@@ -662,9 +663,6 @@ def find_score_peaks(
         else:
             auto_prom = min_prominence
 
-        # Prepend a sentinel strictly below peak_input so k=3 (original
-        # index 0) can be detected by scipy.signal.find_peaks, which
-        # otherwise excludes the first sample as a boundary.
         sentinel = float(np.min(peak_input)) - 1.0
         padded_input = np.concatenate([[sentinel], peak_input])
         peaks_idx_padded, props = find_peaks(padded_input, prominence=auto_prom)
@@ -672,83 +670,94 @@ def find_score_peaks(
         prominences = props["prominences"]
 
         for i, pidx in enumerate(peaks_idx):
-            pk = pidx + 3  # pidx=0 corresponds to k=3
-            if pk >= min_k:
+            cluster_count = pidx + 3
+            if cluster_count >= min_k:
                 prom_raw = float(prominences[i])
-                score_at_k = float(scores[pk - 1])
+                score_at_k = float(scores[cluster_count - 1])
                 baseline = max(score_at_k - prom_raw, 0.0)
                 prom_used = prom_raw
 
                 if use_relative_prominence:
-                    # Fold-change over local baseline: log-like behavior while
-                    # keeping detection in linear-score space.
+                    if use_log_peak_input:
+                        # SciPy's bases are positions; read their original scores.
+                        left_base = int(props["left_bases"][i]) - 1
+                        right_base = int(props["right_bases"][i]) - 1
+                        baseline = max(
+                            float(interior_scores[left_base])
+                            if left_base >= 0
+                            else 0.0,
+                            float(interior_scores[right_base])
+                            if right_base >= 0
+                            else 0.0,
+                            0.0,
+                        )
                     prom_used = (score_at_k + eps) / (baseline + eps)
 
                 if use_relative_prominence:
                     if min_relative_prominence is None or prom_used >= float(
                         min_relative_prominence
                     ):
-                        peak_data.append((pk, prom_used, score_at_k))
+                        peak_data.append((cluster_count, prom_used, score_at_k))
                 elif min_prominence is None or prominence_k_power <= 0:
-                    peak_data.append((pk, prom_used, score_at_k))
+                    peak_data.append((cluster_count, prom_used, score_at_k))
                 else:
                     min_prom_k = float(min_prominence) * (
-                        float(pk) ** float(prominence_k_power)
+                        float(cluster_count) ** float(prominence_k_power)
                     )
                     if prom_used >= min_prom_k:
-                        peak_data.append((pk, prom_used, score_at_k))
+                        peak_data.append((cluster_count, prom_used, score_at_k))
 
-    # Deduplicate (keep highest prominence per k)
     dedup = {}
-    for pk, prom, sc in peak_data:
-        if pk not in dedup or prom > dedup[pk][0]:
-            dedup[pk] = (prom, sc)
-    peak_data = [(pk, prom, sc) for pk, (prom, sc) in dedup.items()]
-
-    if exclude_k2:
-        peak_data = [item for item in peak_data if item[0] != 2]
+    for cluster_count, prominence, score in peak_data:
+        if cluster_count not in dedup or prominence > dedup[cluster_count][0]:
+            dedup[cluster_count] = (prominence, score)
+    peak_data = [
+        (cluster_count, prominence, score)
+        for cluster_count, (prominence, score) in dedup.items()
+    ]
 
     if len(peak_data) == 0:
-        # No peaks found at all — fallback to k=2 if it beats k=3
-        if not exclude_k2 and len(scores) > 2 and scores[1] > scores[2]:
-            pc.peaks_by_rank = [2]
+        if allow_k2 and len(scores) > 2 and scores[1] > scores[2]:
+            clustering.peaks_by_rank = [2]
             if not resolution_on:
-                pc.resolution_info = None
-                pc.peaks_by_resolution = None
+                clustering.resolution_info = None
+                clustering.peaks_by_resolution = None
             else:
-                pc.resolution_info = {
+                clustering.resolution_info = {
                     "fallback_k2": [(2, float(scores[1]), float(scores[1]), 1.0)]
                 }
-                pc.peaks_by_resolution = {"fallback_k2": [2]}
+                clustering.peaks_by_resolution = {"fallback_k2": [2]}
             _emit_plot([2])
-            return pc.peaks_by_rank
+            return clustering.peaks_by_rank
 
-        logger.info("PhytClust did not find any clusters.")
-        pc.peaks_by_rank = []
-        pc.resolution_info = None
-        pc.peaks_by_resolution = None
+        logger.info("No score peaks found.")
+        clustering.peaks_by_rank = []
+        clustering.resolution_info = None
+        clustering.peaks_by_resolution = None
         _emit_plot([])
-        return pc.peaks_by_rank
+        return clustering.peaks_by_rank
 
     if not resolution_on:
-        pc.resolution_info = None
-        pc.peaks_by_resolution = None
+        clustering.resolution_info = None
+        clustering.peaks_by_resolution = None
 
         ranked_data = _rank_peaks(peak_data, ranking_mode, prominence_weight)
+        ranked_data = _rank_peak_partitions(clustering, ranked_data, peak_settings)
 
         chosen = ranked_data[:global_peaks]
         final_peaks = [int(x["k"]) for x in chosen]
-        pc.peaks_by_rank = final_peaks
-        pc.peak_ranking_details = ranked_data
+        clustering.peaks_by_rank = final_peaks
+        clustering.peak_ranking_details = ranked_data
 
     else:
-        bin_ranges = _define_bins(pc, num_bins=num_bins, k_lo=min_k, k_hi=k_end)
-        pc.bin_ranges_current = bin_ranges
-        pc.resolution_info = {}
-        pc.peaks_by_resolution = {}
+        bin_ranges = _define_bins(clustering, num_bins=num_bins, k_lo=1, k_hi=k_end)
+        clustering.bin_ranges_current = bin_ranges
+        clustering.resolution_info = {}
+        clustering.peaks_by_resolution = {}
 
         ranked_data = _rank_peaks(peak_data, ranking_mode, prominence_weight)
-        pc.peak_ranking_details = ranked_data
+        ranked_data = _rank_peak_partitions(clustering, ranked_data, peak_settings)
+        clustering.peak_ranking_details = ranked_data
 
         all_picked_peaks = []
         for i, (start_k, end_k) in enumerate(bin_ranges, start=1):
@@ -756,9 +765,8 @@ def find_score_peaks(
             candidates = [item for item in ranked_data if start_k <= item["k"] <= end_k]
             chosen = candidates[:peaks_per_bin]
 
-            # Bin diagnostics: why empty bins can happen.
             bin_k_lo = max(int(start_k), int(min_k), 2)
-            bin_k_hi = min(int(end_k), len(scores))
+            bin_k_hi = min(int(end_k), len(scores), k_end)
             bin_best_k = None
             bin_best_score = None
             if bin_k_lo <= bin_k_hi:
@@ -782,12 +790,12 @@ def find_score_peaks(
                     ]
 
             chosen_kvals = [x["k"] for x in chosen]
-            pc.resolution_info[bin_label] = chosen
-            pc.peaks_by_resolution[bin_label] = chosen_kvals
+            clustering.resolution_info[bin_label] = chosen
+            clustering.peaks_by_resolution[bin_label] = chosen_kvals
             all_picked_peaks.extend(chosen_kvals)
 
-        final_peaks = sorted({int(pk) for pk in all_picked_peaks})
-        pc.peaks_by_rank = final_peaks
+        final_peaks = sorted({int(cluster_count) for cluster_count in all_picked_peaks})
+        clustering.peaks_by_rank = final_peaks
 
-    _emit_plot(pc.peaks_by_rank)
-    return pc.peaks_by_rank
+    _emit_plot(clustering.peaks_by_rank)
+    return clustering.peaks_by_rank

@@ -31,50 +31,62 @@ logger = logging.getLogger("phytclust.gui")
 
 
 def _normalize_newick(newick: str) -> str:
-    """Quote unquoted leaf names containing spaces before parsing."""
+    """Use single quotes for quoted names and names containing spaces."""
     result: list[str] = []
     position = 0
-    text_length = len(newick)
-
-    while position < text_length:
+    while position < len(newick):
         character = newick[position]
-
         if character in "(),;":
             result.append(character)
             position += 1
-
+        elif character == "[":
+            start = position
+            depth = 1
+            position += 1
+            while position < len(newick) and depth:
+                if newick[position] == "[":
+                    depth += 1
+                elif newick[position] == "]":
+                    depth -= 1
+                position += 1
+            if depth:
+                raise ValueError("The Newick comment is not closed.")
+            result.append(newick[start:position])
         elif character in "'\"":
             quote = character
-            token_end = position + 1
-            while token_end < text_length and newick[token_end] != quote:
-                token_end += 1
-            result.append(newick[position : token_end + 1])
-            position = token_end + 1
-
-        elif character == ":":
-            result.append(":")
+            label: list[str] = []
             position += 1
-            while position < text_length and newick[position] not in "(),;":
-                result.append(newick[position])
+            while position < len(newick):
+                character = newick[position]
                 position += 1
-
+                if character != quote:
+                    label.append(character)
+                elif position < len(newick) and newick[position] == quote:
+                    label.append(quote)
+                    position += 1
+                else:
+                    break
+            else:
+                raise ValueError("The quoted Newick name is not closed.")
+            result.append("'" + "".join(label).replace("'", "''") + "'")
+        elif character == ":":
+            start = position
+            position += 1
+            while position < len(newick) and newick[position] not in "(),;[":
+                position += 1
+            result.append(newick[start:position])
         else:
-            token_end = position
-            while token_end < text_length and newick[token_end] not in "(),;:'\"\\":
-                token_end += 1
-            if token_end == position:
-                result.append(newick[position])
+            start = position
+            while position < len(newick) and newick[position] not in "(),:;[]'\"":
                 position += 1
-                continue
-            token = newick[position:token_end]
-            stripped = token.strip()
-            if stripped and " " in stripped:
-                leading = token[: len(token) - len(token.lstrip())]
-                result.append(leading + "'" + stripped + "'")
+            if start == position:
+                raise ValueError("Unexpected character in Newick tree.")
+            token = newick[start:position]
+            label = token.strip()
+            if label and any(character.isspace() for character in label):
+                result.append("'" + label.replace("'", "''") + "'")
             else:
                 result.append(token)
-            position = token_end
-
     return "".join(result)
 
 
@@ -257,9 +269,8 @@ def _run_phytclust(request: PhytclustRequest):
     if not request.newick.strip():
         raise HTTPException(status_code=400, detail="Empty Newick string.")
 
-    newick = _normalize_newick(request.newick)
-
     try:
+        newick = _normalize_newick(request.newick)
         parsed = Phylo.read(StringIO(newick.strip()), "newick")
     except (ValueError, Phylo.NewickIO.NewickError) as error:
         raise HTTPException(

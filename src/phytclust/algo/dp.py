@@ -225,7 +225,7 @@ def compute_dp_table(pc) -> None:
     if min_cluster_size < 1:
         raise ConfigurationError("min_cluster_size must be ≥ 1.")
 
-    outlier_thresh = pc.outlier.size_threshold
+    outlier_thresh = pc.outlier.counting_threshold
     use_outlier = outlier_thresh is not None
     prefer_fewer = pc.outlier.prefer_fewer
     preserve_dp_tables = bool(

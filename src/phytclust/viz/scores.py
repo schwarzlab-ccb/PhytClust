@@ -61,7 +61,7 @@ def _resolution_bands(pc, axis, config, first, last, num_bins, logarithmic):
             transform=axis.get_xaxis_transform(),
             ha="center",
             va="bottom",
-            fontsize=getattr(config, "bin_labelsize", 9),
+            fontsize=getattr(config, "bin_labelsize", 14),
             weight="semibold",
             color=colour,
         )
@@ -91,22 +91,48 @@ def _label_peaks(axis, points, fontsize, marker_size):
                 "alpha": 0.9,
             },
         )
-        for row in range(len(points) + 2):
-            for direction in (1, -1):
-                annotation.set_position(
-                    (0, direction * (marker_size / 2 + 5 + row * (fontsize + 3)))
-                )
-                annotation.set_verticalalignment("bottom" if direction > 0 else "top")
-                bounds = annotation.get_window_extent(renderer).expanded(1.15, 1.15)
-                if (
-                    axis.bbox.contains(bounds.x0, bounds.y0)
-                    and axis.bbox.contains(bounds.x1, bounds.y1)
-                    and not any(bounds.overlaps(previous) for previous in occupied)
-                ):
-                    break
-            else:
-                continue
-            break
+        peak_x, peak_y = axis.transData.transform((count, score))
+        half_width = annotation.get_window_extent(renderer).width * 0.575 + 4
+        label_x = np.clip(peak_x, axis.bbox.x0 + half_width, axis.bbox.x1 - half_width)
+        edge_offset = (label_x - peak_x) * 72 / axis.figure.dpi
+        horizontal_offsets = [
+            edge_offset,
+            edge_offset - fontsize * 1.5,
+            edge_offset + fontsize * 1.5,
+        ]
+        placements = (
+            (horizontal, direction, row)
+            for row in range(len(points) + 2)
+            for direction in (1, -1)
+            for horizontal in horizontal_offsets
+        )
+        for horizontal, direction, row in placements:
+            annotation.set_position(
+                (horizontal, direction * (marker_size / 2 + 5 + row * (fontsize + 3)))
+            )
+            annotation.set_verticalalignment("bottom" if direction > 0 else "top")
+            bounds = annotation.get_window_extent(renderer).expanded(1.15, 1.15)
+            if (
+                axis.bbox.contains(bounds.x0, bounds.y0)
+                and axis.bbox.contains(bounds.x1, bounds.y1)
+                and not any(bounds.overlaps(previous) for previous in occupied)
+            ):
+                break
+        if abs(horizontal) > 1:
+            # Use axes coordinates so the connecting line scales with exported figures.
+            label_edge = bounds.y0 if direction > 0 else bounds.y1
+            endpoints = axis.transAxes.inverted().transform(
+                [(peak_x, peak_y), ((bounds.x0 + bounds.x1) / 2, label_edge)]
+            )
+            axis.plot(
+                endpoints[:, 0],
+                endpoints[:, 1],
+                transform=axis.transAxes,
+                color="#b84b4b",
+                linewidth=0.6,
+                alpha=0.65,
+                zorder=2.5,
+            )
         occupied.append(bounds)
 
 
@@ -270,20 +296,20 @@ def plot_scores(
     axis.tick_params(
         axis="both",
         which="both",
-        labelsize=getattr(config, "tick_labelsize", 9),
+        labelsize=getattr(config, "tick_labelsize", 14),
         color="#999999",
     )
     axis.set_xlabel(
         "Cluster count" + (" (log scale)" if mode == "log" else ""),
-        fontsize=getattr(config, "axis_label_fontsize", 10),
+        fontsize=getattr(config, "axis_label_fontsize", 18),
     )
     axis.set_ylabel(
         "Score" + (f" ({scale})" if scale != "linear" else ""),
-        fontsize=getattr(config, "axis_label_fontsize", 10),
+        fontsize=getattr(config, "axis_label_fontsize", 18),
     )
     axis.set_title(
         "PhytClust’s scores" if title is None else title,
-        fontsize=getattr(config, "title_fontsize", 12),
+        fontsize=getattr(config, "title_fontsize", 20),
         fontfamily=[
             getattr(config, "title_fontfamily", "Liberation Sans"),
             "DejaVu Sans",
@@ -293,5 +319,5 @@ def plot_scores(
         pad=30 if resolution_on else 14,
     )
     figure.tight_layout()
-    _label_peaks(axis, points, getattr(config, "peak_labelsize", 9), marker_size)
+    _label_peaks(axis, points, getattr(config, "peak_labelsize", 16), marker_size)
     return figure
