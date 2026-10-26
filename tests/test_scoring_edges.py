@@ -83,3 +83,94 @@ def test_peaks_obey_range_and_minimum(monkeypatch, scores, start, end, min_k):
         assert peaks == [4]
     else:
         assert peaks == []
+
+
+@pytest.mark.parametrize("resolution", [False, True])
+@pytest.mark.parametrize("log_input", [False, True])
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize(
+    "curve,expected",
+    [
+        ([420.6, 269.3, 141.3], []),
+        ([82.2, 622.6, 186.6], [3]),
+        ([10, 5], []),
+        ([10], []),
+        ([10, 10, 5], []),
+        ([1, 10, 10, 1], [3]),
+        ([1, 2, 8, 2, 1], [4]),
+        ([1, 2, 3], []),
+    ],
+)
+def test_interior_peaks_use_observed_k2_context(
+    resolution, log_input, relative, curve, expected
+):
+    pc = SimpleNamespace(scores=np.array([0, *curve]), no_split_zero_length=True)
+    peaks = scoring.find_score_peaks(
+        pc,
+        plot=False,
+        resolution_on=resolution,
+        num_bins=1,
+        peak_config=PeakConfig(
+            exclude_k2=True,
+            use_log_peak_input=log_input,
+            use_relative_prominence=relative,
+        ),
+    )
+    assert peaks == expected
+
+
+@pytest.mark.parametrize("resolution", [False, True])
+@pytest.mark.parametrize("log_input", [False, True])
+@pytest.mark.parametrize("relative", [False, True])
+def test_eligibility_preserves_peak_prominence(resolution, log_input, relative):
+    pc = SimpleNamespace(
+        scores=np.array([0, 8, 10, 1, 6, 2]), no_split_zero_length=True
+    )
+    common = dict(
+        use_log_peak_input=log_input,
+        use_relative_prominence=relative,
+        min_prominence=0,
+    )
+
+    def detect(**settings):
+        scoring.find_score_peaks(
+            pc,
+            plot=False,
+            resolution_on=resolution,
+            num_bins=1,
+            global_peaks=10,
+            peak_config=PeakConfig(**common, **settings),
+        )
+        return {item["k"]: item["prominence"] for item in pc.peak_ranking_details}
+
+    original = detect()
+    assert set(original) == {3, 5}
+    assert detect(exclude_k2=True) == original
+    assert detect(min_k=4) == {5: original[5]}
+    expected = 10 / 8 if relative else np.log(10 / 8) if log_input else 2
+    assert original[3] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("resolution", [False, True])
+@pytest.mark.parametrize("restriction", [dict(min_k=4), dict(k_start=4)])
+def test_restricted_boundary_does_not_create_peak(resolution, restriction):
+    pc = SimpleNamespace(
+        scores=np.array([0, 1, 10, 7, 2, 5, 1]), no_split_zero_length=True
+    )
+    settings = PeakConfig(min_k=restriction.get("min_k", 2))
+    assert scoring.find_score_peaks(
+        pc,
+        plot=False,
+        resolution_on=resolution,
+        num_bins=1,
+        k_start=restriction.get("k_start"),
+        peak_config=settings,
+    ) == [6]
+
+
+@pytest.mark.parametrize("resolution", [False, True])
+def test_k2_boundary_selection_is_preserved(resolution):
+    pc = SimpleNamespace(
+        scores=np.array([0, 420.6, 269.3, 141.3]), no_split_zero_length=True
+    )
+    assert scoring.find_score_peaks(pc, plot=False, resolution_on=resolution) == [2]

@@ -646,31 +646,28 @@ def find_score_peaks(
                 ):
                     peak_data.append((2, boundary_prom, score_k2))
 
-    interior_start = 2
-    interior_scores = scores[interior_start:k_end].astype(float)
-    interior_scores = np.nan_to_num(interior_scores, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # A trailing zero supplies the descending side of the preceding peak.
-    peak_input = interior_scores
+    # Eligibility must not change the observed context or prominence of peaks.
+    # Keep k=2 as the left neighbour of k=3, even when k=2 is ineligible.
+    # Its own selection remains governed by the boundary test above.
+    context_start = 1
+    context_scores = scores[context_start:k_end]
+    peak_input = context_scores
 
     if use_log_peak_input:
         peak_input = np.log(np.maximum(peak_input, 0.0) + max(log_peak_offset, 1e-15))
 
-    if len(peak_input) >= 2:
+    if len(peak_input) >= 3:
         score_range = float(np.max(peak_input) - np.min(peak_input))
         if min_prominence is None:
             auto_prom = 0.01 * score_range
         else:
             auto_prom = min_prominence
 
-        sentinel = float(np.min(peak_input)) - 1.0
-        padded_input = np.concatenate([[sentinel], peak_input])
-        peaks_idx_padded, props = find_peaks(padded_input, prominence=auto_prom)
-        peaks_idx = peaks_idx_padded - 1
+        peaks_idx, props = find_peaks(peak_input, prominence=auto_prom)
         prominences = props["prominences"]
 
         for i, pidx in enumerate(peaks_idx):
-            cluster_count = pidx + 3
+            cluster_count = pidx + context_start + 1
             if cluster_count >= min_k:
                 prom_raw = float(prominences[i])
                 score_at_k = float(scores[cluster_count - 1])
@@ -680,15 +677,11 @@ def find_score_peaks(
                 if use_relative_prominence:
                     if use_log_peak_input:
                         # SciPy's bases are positions; read their original scores.
-                        left_base = int(props["left_bases"][i]) - 1
-                        right_base = int(props["right_bases"][i]) - 1
+                        left_base = int(props["left_bases"][i])
+                        right_base = int(props["right_bases"][i])
                         baseline = max(
-                            float(interior_scores[left_base])
-                            if left_base >= 0
-                            else 0.0,
-                            float(interior_scores[right_base])
-                            if right_base >= 0
-                            else 0.0,
+                            float(context_scores[left_base]),
+                            float(context_scores[right_base]),
                             0.0,
                         )
                     prom_used = (score_at_k + eps) / (baseline + eps)
