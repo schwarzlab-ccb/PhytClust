@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+import warnings
 from dataclasses import dataclass
 from numbers import Integral
 from typing import Any, Callable, Optional, Union
@@ -18,43 +19,22 @@ from matplotlib.font_manager import FontProperties
 import numpy as np
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("phytclust")
 
 COLORS = {
-    "allele_a": mpl.colors.to_rgba("orange"),
-    "allele_b": mpl.colors.to_rgba("teal"),
-    "clonal": mpl.colors.to_rgba("lightgrey"),
-    "normal": mpl.colors.to_rgba("dimgray"),
-    "gain": mpl.colors.to_rgba("red"),
-    "wgd": mpl.colors.to_rgba("green"),
-    "loss": mpl.colors.to_rgba("blue"),
-    "chr_label": mpl.colors.to_rgba("grey"),
-    "vlines": "#1f77b4",
     "marker_internal": "#1f77b4",
     "marker_terminal": "black",
     "marker_normal": "green",
-    "summary_label": "grey",
     "branch_label": mpl.colors.to_rgba("dimgray"),
-    "background": "white",
-    "background_hatch": "lightgray",
-    "patch_background": "white",
 }
 
-LINEWIDTHS = {"copy_numbers": 2, "chr_boundary": 1, "segment_boundary": 0.5}
-ALPHAS = {"patches": 0.15, "patches_wgd": 0.3, "clonal": 0.3}
+LINEWIDTHS = {"segment_boundary": 0.5}
 SIZES = {
     "tree_marker": 40,
-    "ylabel_font": 8,
-    "ylabel_tick": 6,
     "xlabel_font": 10,
     "xlabel_tick": 8,
-    "chr_label": 8,
     "branch_label": 6,
 }
-
-
-class PlotError(Exception):
-    pass
 
 
 def _format_branch_value(
@@ -136,21 +116,20 @@ def plot_tree(
     show_branch_lengths: bool = True,
     show_branch_support: bool = False,
     branch_labels: Optional[Union[dict[Any, str], Callable[[Any], str]]] = None,
-    label_colors: Optional[Union[dict[str, str], Callable[[str], str]]] = None,
+    label_colours: Optional[Union[dict[str, str], Callable[[str], str]]] = None,
     hide_internal_nodes: bool = True,
     marker_size: Optional[int] = None,
     line_width: Optional[float] = None,
     layout: str = "rectangular",
-    branch_color_func: Optional[Callable[[Any], Any]] = None,
+    branch_colour_func: Optional[Callable[[Any], Any]] = None,
     show_branch_axis: bool = True,
     _geometry: Optional[_TreeGeometry] = None,
     **kwargs: Any,
 ) -> plt.Figure:
     """Draw a tree with batched branches and optional leaf and branch labels.
 
-    Rectangular layout uses branch lengths; cladogram layout aligns leaves
-    and hides the branch axis. Zero marker size or line width disables that
-    element. Callbacks receive clades, and callback errors reach the caller.
+    Rectangular layout uses branch lengths; cladogram aligns the leaves and
+    hides the axis. A marker size or line width of 0 hides that element.
     """
     marker_size = SIZES["tree_marker"] if marker_size is None else marker_size
     line_width = LINEWIDTHS["segment_boundary"] if line_width is None else line_width
@@ -205,7 +184,7 @@ def plot_tree(
     else:
         fig = ax.figure
 
-    if label_colors is None:
+    if label_colours is None:
         clade_colors: dict[str, Any] = {}
         for clade in geometry.nodes:
             name = getattr(clade, "name", None)
@@ -223,14 +202,14 @@ def plot_tree(
 
     else:
         get_label_color = (
-            label_colors
-            if callable(label_colors)
-            else (lambda label: label_colors.get(label, "black"))
+            label_colours
+            if callable(label_colours)
+            else (lambda label: label_colours.get(label, "black"))
         )
 
     def marker_func(node):
         name = getattr(node, "name", None)
-        if label_colors is None and name is None:
+        if label_colours is None and name is None:
             color = (
                 COLORS["marker_internal"] if node.clades else COLORS["marker_terminal"]
             )
@@ -315,8 +294,8 @@ def plot_tree(
                 )
 
             edge_color = color
-            if branch_color_func is not None:
-                branch_color = branch_color_func(clade)
+            if branch_colour_func is not None:
+                branch_color = branch_colour_func(clade)
                 if branch_color is not None:
                     edge_color = branch_color
 
@@ -491,7 +470,7 @@ def _get_y_positions(
     if outgroup is not None:
         matches = [node for node in nodes if node.name == outgroup]
         if len(matches) != 1:
-            raise PlotError(f"Outgroup {outgroup!r} must match exactly one clade.")
+            raise ValidationError(f"Outgroup {outgroup!r} must match exactly one clade.")
         outgroup_leaves = {node for node in iter_clades(matches[0]) if not node.clades}
         leaves = [leaf for leaf in leaves if leaf in outgroup_leaves] + [
             leaf for leaf in leaves if leaf not in outgroup_leaves
@@ -619,7 +598,7 @@ def _draw_cluster_boxes(
     ax: plt.Axes,
     tree: Any,
     cluster: dict[Any, int],
-    cluster_to_color: dict[int, Any],
+    cluster_to_colour: dict[int, Any],
     *,
     outgroup: Optional[str],
     hide_internal_nodes: bool,
@@ -661,10 +640,10 @@ def _draw_cluster_boxes(
 
     for cluster_id, members in clusters_by_id.items():
         if cluster_id < 0 and mark_outliers:
-            colour = cluster_to_color.get(cluster_id, "#888888")
+            colour = cluster_to_colour.get(cluster_id, "#888888")
             outlier = True
         else:
-            colour = cluster_to_color.get(cluster_id, "#888888")
+            colour = cluster_to_colour.get(cluster_id, "#888888")
             outlier = False
         if colour is None:
             continue
@@ -718,7 +697,7 @@ def _draw_cluster_bars(
     ax: plt.Axes,
     tree: Any,
     cluster: dict[Any, int],
-    cluster_to_color: dict[int, Any],
+    cluster_to_colour: dict[int, Any],
     *,
     outgroup: Optional[str],
     hide_internal_nodes: bool,
@@ -761,7 +740,7 @@ def _draw_cluster_bars(
         cluster_id = cluster_ids[i] if i < leaf_count else object()
         if cluster_id != run_cluster_id:
             if run_cluster_id is not None:
-                colour = cluster_to_color.get(int(run_cluster_id))
+                colour = cluster_to_colour.get(int(run_cluster_id))
                 if colour is not None:
                     ax.add_patch(
                         plt.Rectangle(
@@ -779,90 +758,24 @@ def _draw_cluster_bars(
             run_cluster_id = cluster_id
 
 
-def plot_peaks(
-    scores_subset: list[float],
-    peaks: list[int],
-    k_start: int,
-    k_end: Optional[int] = None,
-    fig_width: int = 10,
-    fig_height: int = 10,
-    log_scale_x: bool = False,
-    log_scale_y: bool = False,
-    show_plot: bool = True,
-) -> plt.Figure:
-    """Plot scores starting at k_start and mark peaks supplied as array indices.
+# Maps with at most this many colours are used entry by entry; larger
+# ones (viridis has 256) are sampled.
+_QUALITATIVE_MAX_COLOURS = 32
 
-    k_end limits the displayed range. Peak labels show cluster counts, not
-    array indices. Return the figure and optionally display it.
+
+def _colours_from_cmap(cmap_obj, cluster_count: int) -> list:
+    """Return distinguishable colours from a matplotlib colormap.
+
+    Qualitative maps such as ``tab10`` are used as listed (cycling when there
+    are more clusters than colours). Continuous maps such as ``viridis`` are
+    sampled at evenly spaced positions, one per cluster.
     """
-    scores = np.asarray(scores_subset, dtype=float)
-    if scores.ndim != 1 or not scores.size or not np.isfinite(scores).all():
-        raise ValidationError(
-            "scores_subset must be a nonempty vector of finite scores."
-        )
-    if isinstance(k_start, bool) or not isinstance(k_start, Integral) or k_start < 1:
-        raise ValidationError("k_start must be a positive integer.")
-    if any(
-        isinstance(peak, bool)
-        or not isinstance(peak, Integral)
-        or peak < 0
-        or peak >= len(scores)
-        for peak in peaks
-    ):
-        raise ValidationError("Peak indices must refer to entries in scores_subset.")
-    if k_end is not None and (
-        isinstance(k_end, bool) or not isinstance(k_end, Integral) or k_end < k_start
-    ):
-        raise ValidationError("k_end must be an integer at least k_start.")
-    if log_scale_y and not (scores > 0).all():
-        raise ValidationError("Logarithmic score axes require positive scores.")
-    title_fontsize, label_fontsize = 16, 14
-    tick_labelsize, legend_fontsize, peak_labelsize = 12, 12, 12
-
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    x_vals = np.arange(len(scores)) + k_start
-    ax.plot(x_vals, scores_subset, label="Scores")
-
-    peak_x_vals = np.array(peaks) + k_start
-    peak_y_vals = np.array([scores_subset[p] for p in peaks])
-    ax.plot(
-        peak_x_vals, peak_y_vals, "x", markersize=10, color="red", label="Top Peaks"
-    )
-
-    ax.set_title("Cluster score peaks", fontsize=title_fontsize)
-    ax.set_xlabel("k", fontsize=label_fontsize)
-    ax.set_ylabel("Score", fontsize=label_fontsize)
-    ax.tick_params(axis="both", labelsize=tick_labelsize)
-
-    if log_scale_x:
-        ax.set_xscale("log")
-    if log_scale_y:
-        ax.set_yscale("log")
-
-    if k_end is not None:
-        ax.set_xlim(k_start, k_end + 1)
-        ax.set_title(
-            f"Cluster score peaks from k = {k_start} to {k_end}",
-            fontsize=title_fontsize,
-        )
-
-    data_min, data_max = min(scores_subset), max(scores_subset)
-    offset_y = 0.02 if data_max == data_min else 0.02 * (data_max - data_min)
-
-    for px, py in zip(peak_x_vals, peak_y_vals):
-        ax.text(
-            px,
-            py + offset_y,
-            str(int(px)),
-            fontsize=peak_labelsize,
-            ha="center",
-            va="bottom",
-        )
-
-    ax.legend(fontsize=legend_fontsize)
-    if show_plot:
-        plt.show()
-    return fig
+    listed = getattr(cmap_obj, "colors", None)
+    if listed is not None and len(listed) <= _QUALITATIVE_MAX_COLOURS:
+        return list(listed)
+    count = max(cluster_count, 1)
+    positions = np.linspace(0, 1, count) if count > 1 else np.array([0.5])
+    return list(cmap_obj(positions))
 
 
 def plot_cluster(
@@ -898,11 +811,10 @@ def plot_cluster(
 ) -> plt.Figure:
     """Draw one partition with optional cluster bars, boxes, and coloured branches.
 
-    Cluster keys must be leaves of the plotted tree. Negative IDs represent
-    outliers; their boxes are dashed when outlier=True. Use title to replace
-    the default heading, or an empty string to omit it. A custom palette must
-    contain a colour for every cluster. This function returns the figure,
-    including when save=True, so the caller can close or edit it.
+    Cluster keys must be leaves of the tree. Negative ids are outliers; with
+    outlier=True their boxes are dashed. title replaces the heading; "" removes
+    it. A palette must have a colour per cluster. The figure is returned even
+    when saved.
     """
     geometry = _tree_geometry(
         tree, layout=layout, hide_internal_nodes=hide_internal_nodes, outgroup=outgroup
@@ -922,32 +834,28 @@ def plot_cluster(
         from .palette import expand_palette
 
         resolved_palette = expand_palette(max(cluster_count, 8))
-    elif isinstance(cmap, str):
-        cmap_obj = plt.get_cmap(cmap)
-        resolved_palette = list(
-            cmap_obj.colors
-            if hasattr(cmap_obj, "colors")
-            else cmap_obj(np.linspace(0, 1, getattr(cmap_obj, "N", 20)))
-        )
     else:
-        resolved_palette = list(
-            cmap.colors
-            if hasattr(cmap, "colors")
-            else cmap(np.linspace(0, 1, getattr(cmap, "N", 20)))
+        resolved_palette = _colours_from_cmap(
+            plt.get_cmap(cmap) if isinstance(cmap, str) else cmap, cluster_count
         )
 
-    if not resolved_palette or (
-        palette is not None and cluster_count > len(resolved_palette)
-    ):
-        raise ValidationError("palette must contain a colour for every cluster.")
+    if not resolved_palette:
+        raise ValidationError("palette must contain at least one colour.")
+    if palette is not None and cluster_count > len(resolved_palette):
+        warnings.warn(
+            f"palette has {len(resolved_palette)} colours for {cluster_count} "
+            "clusters; colours repeat.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     palette = [mcolors.to_rgba(col) for col in resolved_palette]
 
     ids = np.fromiter(cluster.values(), dtype=int)
     unique_ids = sorted(set(int(v) for v in ids.tolist()))
-    color_index_by_cluster = {cluster_id: i for i, cluster_id in enumerate(unique_ids)}
+    colour_index_by_cluster = {cluster_id: i for i, cluster_id in enumerate(unique_ids)}
     colours: list[Any] = [
-        palette[color_index_by_cluster[int(cluster_id)] % len(palette)]
+        palette[colour_index_by_cluster[int(cluster_id)] % len(palette)]
         for cluster_id in ids
     ]
 
@@ -961,7 +869,7 @@ def plot_cluster(
         set(leaf_names)
     ) != len(leaf_names):
         raise ValidationError("Clustered leaves must have unique, nonempty names.")
-    leaf_colors = dict(zip(leaf_names, colours))
+    leaf_colours = dict(zip(leaf_names, colours))
 
     if title is None:
         title = f"PhytClust’s clusters at k = {cluster_count}"
@@ -970,12 +878,12 @@ def plot_cluster(
             if np.isfinite(score):
                 title += f" (score = {score:.3g})"
 
-    cluster_to_color = {
-        int(cluster_id): palette[color_index_by_cluster[int(cluster_id)] % len(palette)]
+    cluster_to_colour = {
+        int(cluster_id): palette[colour_index_by_cluster[int(cluster_id)] % len(palette)]
         for cluster_id in unique_ids
     }
 
-    branch_color_func: Optional[Callable[[Any], Any]] = None
+    branch_colour_func: Optional[Callable[[Any], Any]] = None
     if colour_branches_by_cluster:
         subtree_cluster_ids: dict[Any, Optional[int]] = {}
         for clade in reversed(geometry.nodes):
@@ -991,22 +899,22 @@ def plot_cluster(
                 subtree_cluster_ids[clade] = child_reps[0]
             else:
                 subtree_cluster_ids[clade] = None
-        default_branch_color = "#888888"
+        default_branch_colour = "#888888"
 
-        def _resolve_branch_color(clade: Any) -> Any:
+        def _resolve_branch_colour(clade: Any) -> Any:
             subtree_cluster_id = subtree_cluster_ids.get(clade)
             if subtree_cluster_id is None or int(subtree_cluster_id) < 0:
-                return default_branch_color
-            return cluster_to_color.get(int(subtree_cluster_id), default_branch_color)
+                return default_branch_colour
+            return cluster_to_colour.get(int(subtree_cluster_id), default_branch_colour)
 
-        branch_color_func = _resolve_branch_color
+        branch_colour_func = _resolve_branch_colour
 
-    effective_label_colors = None if show_cluster_bars else leaf_colors
+    effective_label_colors = None if show_cluster_bars else leaf_colours
 
     fig = plot_tree(
         tree,
         title=title,
-        label_colors=effective_label_colors,
+        label_colours=effective_label_colors,
         hide_internal_nodes=hide_internal_nodes,
         show_terminal_labels=show_terminal_labels,
         width_scale=width_scale,
@@ -1016,7 +924,7 @@ def plot_cluster(
         marker_size=marker_size,
         outgroup=outgroup,
         layout=layout,
-        branch_color_func=branch_color_func,
+        branch_colour_func=branch_colour_func,
         show_branch_axis=show_branch_axis,
         _geometry=geometry,
         **kwargs,
@@ -1029,7 +937,7 @@ def plot_cluster(
             target_ax,
             tree,
             cluster,
-            cluster_to_color,
+            cluster_to_colour,
             outgroup=outgroup,
             hide_internal_nodes=hide_internal_nodes,
             layout=layout,
@@ -1044,7 +952,7 @@ def plot_cluster(
             target_ax,
             tree,
             cluster,
-            cluster_to_color,
+            cluster_to_colour,
             outgroup=outgroup,
             hide_internal_nodes=hide_internal_nodes,
             bar_width_frac=cluster_bar_width,
@@ -1063,7 +971,7 @@ def plot_cluster(
 
 
 def _comparison_table(input_df: pd.DataFrame) -> pd.DataFrame:
-    """Accept a leaf-by-solution table or the older long table format."""
+    """Accept a wide (leaf × solution) or long table."""
     if isinstance(input_df.index, pd.MultiIndex):
         required_levels = {"leaf_name", "comparison_IDs"}
         if set(input_df.index.names) != required_levels or "cluster_ID" not in input_df:
@@ -1144,18 +1052,13 @@ def plot_multiple_clusters(
 ) -> plt.Figure:
     """Compare assignments across solutions, with an optional aligned tree.
 
-    Rows are leaf names and columns are solution names. The older long format
-    with leaf_name and comparison_IDs index levels and a cluster_ID column is
-    also accepted. Each leaf needs one integer assignment in every solution.
-    Leaf labels sit beside tree tips when a tree is supplied. Assignment
-    bands meet halfway between neighbouring leaves. Vertical separators
-    distinguish solutions; there are no horizontal cell borders.
-    IDs are local to each partition; matching colours across columns do not
-    imply that the clusters have identical members. Negative IDs are grey.
-    y_posns supplies leaf coordinates. fixed_x_range changes the heatmap's
-    horizontal span. cbar_width_ratio controls the colour key's width.
-    cmax, when supplied, is an upper limit for assignment IDs. Without figsize,
-    the figure grows to keep leaf labels readable. Supply figsize for a fixed size.
+    Rows are leaves, columns are solutions; a long format (leaf_name,
+    comparison_IDs index, cluster_ID column) is also accepted. Every leaf needs
+    one integer id per solution. Ids are local to each column, so matching
+    colours do not mean matching members; negative ids are grey. y_posns gives
+    leaf coordinates, fixed_x_range the heatmap span, cbar_width_ratio the
+    colour-key width, cmax an upper id limit. Without figsize the figure grows
+    with the leaf count.
     """
     custom_y_positions = y_posns is not None
     table = _comparison_table(input_df)

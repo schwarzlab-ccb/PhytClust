@@ -2,26 +2,19 @@ import os
 import logging
 import warnings
 from typing import Any, Optional, Callable, List
-from numbers import Integral
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-from ..exceptions import ConfigurationError
+from ..validation import positive_int
+from ..config import ClusterPlotConfig
 from .plots import plot_cluster
 
-logger = logging.getLogger(__name__)
-
-
-def _positive_count(value, name: str) -> int:
-    """Check that a plot count is a positive integer."""
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
-        raise ConfigurationError(f"{name} must be a positive integer.")
-    return int(value)
+logger = logging.getLogger("phytclust")
 
 
 def _partition_maps(pc, counts) -> list[tuple[int, dict]]:
     """Prepare the tables once and retrieve each requested partition."""
-    counts = list(dict.fromkeys(_positive_count(count, "k") for count in counts))
+    counts = list(dict.fromkeys(positive_int(count, "k") for count in counts))
     if not counts:
         return []
     pc._ensure_dp(required_cap=max(counts))
@@ -29,15 +22,17 @@ def _partition_maps(pc, counts) -> list[tuple[int, dict]]:
 
 
 def _resolve_plot_targets(pc, *, top_n, k, n) -> list[tuple[int, dict]]:
-    """Use explicit k, then the old n argument, stored k, or ranked peaks."""
-    top_n = _positive_count(top_n, "top_n")
+    """Explicit k, else the last fixed k, else ranked peaks."""
+    top_n = positive_int(top_n, "top_n")
     if n is not None and k is None:
         warnings.warn(
             "Parameter 'n' is deprecated; use 'k' instead.",
             DeprecationWarning,
             stacklevel=3,
         )
-    selected_count = k if k is not None else n if n is not None else pc.k
+    selected_count = (
+        k if k is not None else n if n is not None else pc.exact_k
+    )
     counts = (
         [selected_count]
         if selected_count is not None
@@ -119,19 +114,25 @@ def plot_clusters(
 ) -> None:
     """Draw selected partitions and optionally save each figure.
 
-    Explicit k takes precedence over stored k and ranked peaks. When several
-    partitions share a filename, append their k values. Labelled trees receive
-    extra vertical space unless an axis or height_scale is supplied. Use title
-    to replace the default heading; an empty string removes it.
+    An explicit k wins over stored k and ranked peaks. Figures sharing a
+    filename get their k appended. Labelled trees get extra height unless ax or
+    height_scale is given. title replaces the heading; "" removes it.
     """
-    dpi = _positive_count(dpi, "dpi")
-    automatic_height = height_scale is None and kwargs.get("ax") is None
-    cluster_cfg = getattr(getattr(pc, "plot_config", None), "cluster", None)
+    dpi = positive_int(dpi, "dpi")
+    cluster_cfg = pc.plot_config.cluster
+    # Only the built-in default height_scale is replaced; an explicit
+    # argument or config value is kept.
+    configured_height = cluster_cfg.height_scale
+    automatic_height = (
+        height_scale is None
+        and kwargs.get("ax") is None
+        and configured_height in (None, ClusterPlotConfig().height_scale)
+    )
 
     def _cfg(value, field, fallback):
         if value is not None:
             return value
-        return getattr(cluster_cfg, field, fallback)
+        return getattr(cluster_cfg, field)
 
     cmap = _cfg(cmap, "cmap", "phytclust")
     hide_internal_nodes = _cfg(hide_internal_nodes, "hide_internal_nodes", True)
@@ -155,9 +156,9 @@ def plot_clusters(
         else pc.tree
     )
     kwargs.setdefault("line_width", 0.9)
-    for k_val, clmap in clusters_to_plot:
+    for k_val, cluster_map in clusters_to_plot:
         fig = plot_cluster(
-            cluster=clmap,
+            cluster=cluster_map,
             tree=plot_tree,
             cmap=cmap,
             outlier=outlier,
@@ -182,7 +183,7 @@ def plot_clusters(
         _style_cluster_figure(
             fig,
             k_val,
-            len(clmap),
+            len(cluster_map),
             labels=show_terminal_labels,
             resize=automatic_height,
             axis=kwargs.get("ax"),
@@ -219,12 +220,11 @@ def plot_multiple_k(
 ) -> None:
     """Draw the supplied cluster counts, or the highest-ranked peaks.
 
-    Prepare the clustering tables once for the largest requested count.
-    Plotting and clustering errors are reported to the caller. Use title to
-    give every figure the same heading; an empty string removes it.
+    DP tables are built once for the largest k. title applies to every figure;
+    "" removes it.
     """
-    dpi = _positive_count(dpi, "dpi")
-    top_n = _positive_count(top_n, "top_n")
+    dpi = positive_int(dpi, "dpi")
+    top_n = positive_int(top_n, "top_n")
     counts = k_values if k_values is not None else (pc.peaks_by_rank or [])[:top_n]
     targets = _partition_maps(pc, counts)
     if not targets:

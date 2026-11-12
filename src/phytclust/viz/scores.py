@@ -1,6 +1,5 @@
 """Plot partition scores and the selected cluster counts."""
 
-from numbers import Integral
 import warnings
 
 import matplotlib.colors as mcolors
@@ -8,29 +7,23 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+from ..validation import positive_int
 from ..exceptions import ConfigurationError, InvalidClusteringError
 from .palette import ACCENT_HEX
-
-
-def _cluster_count(value, name):
-    """Check an integer cluster count supplied to the plot."""
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
-        raise ConfigurationError(f"{name} must be a positive integer.")
-    return int(value)
 
 
 def _resolution_bands(pc, axis, config, first, last, num_bins, logarithmic):
     """Draw the portions of resolution classes inside the plotted range."""
     from ..algo.bins import define_bins
 
-    ranges = getattr(pc, "bin_ranges_current", None)
+    ranges = pc.bin_ranges_current
     if ranges is None:
         ranges = (
             define_bins(pc, num_bins, k_lo=first, k_hi=last)
             if last > first
             else [(first, last)]
         )
-    palette = getattr(config, "colorblind_palette", None)
+    palette = config.colorblind_palette
     palette = list(ACCENT_HEX if palette is None else palette)
     if not palette or any(not mcolors.is_color_like(color) for color in palette):
         raise ConfigurationError("colorblind_palette must contain valid colours.")
@@ -61,7 +54,7 @@ def _resolution_bands(pc, axis, config, first, last, num_bins, logarithmic):
             transform=axis.get_xaxis_transform(),
             ha="center",
             va="bottom",
-            fontsize=getattr(config, "bin_labelsize", 14),
+            fontsize=config.bin_labelsize,
             weight="semibold",
             color=colour,
         )
@@ -73,7 +66,10 @@ def _resolution_bands(pc, axis, config, first, last, num_bins, logarithmic):
 
 def _label_peaks(axis, points, fontsize, marker_size):
     """Place cluster-count labels without covering earlier labels."""
-    renderer = axis.figure.canvas.get_renderer()
+    canvas = axis.figure.canvas
+    # Only raster canvases expose get_renderer(); with the PDF, SVG and PS
+    # backends, get_window_extent(None) asks the figure for a renderer instead.
+    renderer = canvas.get_renderer() if hasattr(canvas, "get_renderer") else None
     occupied = []
     for count, score in sorted(points):
         annotation = axis.annotate(
@@ -158,29 +154,29 @@ def plot_scores(
     When negative scores are retained, a symmetric log axis also shows zero.
     ``log_base=None`` uses base ten. Set ``title=""`` to leave out the title.
     """
-    k_start = _cluster_count(k_start, "k_start")
+    k_start = positive_int(k_start, "k_start")
     if k_end is not None:
-        k_end = _cluster_count(k_end, "k_end")
+        k_end = positive_int(k_end, "k_end")
         if k_end < k_start:
             raise ConfigurationError("k_end must be at least k_start.")
-    config = getattr(getattr(pc, "plot_config", None), "scores", None)
-    width = getattr(config, "fig_width", 9) if fig_width is None else fig_width
-    height = getattr(config, "fig_height", 5) if fig_height is None else fig_height
+    config = pc.plot_config.scores
+    width = config.fig_width if fig_width is None else fig_width
+    height = config.fig_height if fig_height is None else fig_height
     if not all(np.isfinite(value) and value > 0 for value in (width, height)):
         raise ConfigurationError("Figure width and height must be finite and positive.")
-    mode = getattr(config, "x_axis_mode", "log") if x_axis_mode is None else x_axis_mode
+    mode = config.x_axis_mode if x_axis_mode is None else x_axis_mode
     if mode not in ("log", "linear"):
         raise ConfigurationError("x_axis_mode must be either 'log' or 'linear'.")
-    base = getattr(config, "log_base", None) if log_base is None else log_base
+    base = config.log_base if log_base is None else log_base
     base = 10.0 if base is None else base
     if not np.isfinite(base) or base <= 1:
         raise ConfigurationError("log_base must be finite and greater than one.")
     if resolution_on:
-        num_bins = _cluster_count(num_bins, "num_bins")
+        num_bins = positive_int(num_bins, "num_bins")
     use_stored = scores_subset is None
-    values = getattr(pc, "scores", None) if use_stored else scores_subset
+    values = pc.scores if use_stored else scores_subset
     if values is None or (use_stored and np.size(values) == 0):
-        raise InvalidClusteringError("Scores are empty, please calculate scores first.")
+        raise InvalidClusteringError("Scores are empty. Calculate scores before plotting.")
     try:
         values = np.asarray(values, dtype=float)
     except (TypeError, ValueError) as error:
@@ -195,15 +191,15 @@ def plot_scores(
         else values[: None if k_end is None else k_end - k_start + 1]
     )
     counts = np.arange(k_start, k_start + len(values))
-    zero_negative_scores = getattr(config, "clamp_negative_to_zero", True)
+    zero_negative_scores = config.clamp_negative_to_zero
     if zero_negative_scores:
         values = np.maximum(values, 0)
     peak_counts = (
         []
         if peaks is None
-        else sorted({_cluster_count(value, "Peak cluster count") for value in peaks})
+        else sorted({positive_int(value, "Peak cluster count") for value in peaks})
     )
-    log_y = getattr(config, "log_scale_y", True) if log_scale_y is None else log_scale_y
+    log_y = config.log_scale_y if log_scale_y is None else log_scale_y
     plotted_values = values.copy()
     scale = "linear"
     if log_y and values.size:
@@ -241,7 +237,10 @@ def plot_scores(
         )
     else:
         axis.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    axis.set_xlim(max(0.5, counts[0] - 0.5), counts[-1] + 0.5)
+    if mode == "log":
+        axis.set_xlim(counts[0], counts[-1])
+    else:
+        axis.set_xlim(max(0.5, counts[0] - 0.5), counts[-1] + 0.5)
     if scale == "log":
         axis.set_yscale("log", base=base)
         positive = values[values > 0]
@@ -261,7 +260,7 @@ def plot_scores(
             0 if zero_negative_scores else values.min() - span * 0.15,
             values.max() + span * 0.25,
         )
-    marker_size = getattr(config, "peak_markersize", 7)
+    marker_size = config.peak_markersize
     points = [
         (count, plotted_values[count - k_start])
         for count in peak_counts
@@ -272,7 +271,7 @@ def plot_scores(
         axis.plot(
             *zip(*points),
             linestyle="none",
-            marker=getattr(config, "peak_marker", "o"),
+            marker=config.peak_marker,
             markersize=marker_size,
             markerfacecolor="#b84b4b",
             markeredgecolor="white",
@@ -296,22 +295,22 @@ def plot_scores(
     axis.tick_params(
         axis="both",
         which="both",
-        labelsize=getattr(config, "tick_labelsize", 14),
+        labelsize=config.tick_labelsize,
         color="#999999",
     )
     axis.set_xlabel(
         "Cluster count" + (" (log scale)" if mode == "log" else ""),
-        fontsize=getattr(config, "axis_label_fontsize", 18),
+        fontsize=config.axis_label_fontsize,
     )
     axis.set_ylabel(
         "Score" + (f" ({scale})" if scale != "linear" else ""),
-        fontsize=getattr(config, "axis_label_fontsize", 18),
+        fontsize=config.axis_label_fontsize,
     )
     axis.set_title(
         "PhytClust’s scores" if title is None else title,
-        fontsize=getattr(config, "title_fontsize", 20),
+        fontsize=config.title_fontsize,
         fontfamily=[
-            getattr(config, "title_fontfamily", "Liberation Sans"),
+            config.title_fontfamily,
             "DejaVu Sans",
         ],
         weight="normal",
@@ -319,5 +318,5 @@ def plot_scores(
         pad=30 if resolution_on else 14,
     )
     figure.tight_layout()
-    _label_peaks(axis, points, getattr(config, "peak_labelsize", 16), marker_size)
+    _label_peaks(axis, points, config.peak_labelsize, marker_size)
     return figure
