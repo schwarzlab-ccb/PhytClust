@@ -126,7 +126,7 @@ def _merge_all_cluster_counts(
     """Calculate all requested cluster counts using a NumPy grid.
 
     Each column contains the possible splits for one parent cluster count.
-    Use the shorter child table for rows and allocate only requested columns."""
+    """
     shorter_state_count, longer_state_count = len(left_costs), len(right_costs)
     right_state_count = longer_state_count
     original_left_state_count = shorter_state_count
@@ -205,7 +205,6 @@ def _merge_all_cluster_counts(
     order = tie_key * (column_count + 1) + left_state_indices
     rows = np.where(candidate_mask, order, np.iinfo(np.int64).max).argmin(axis=0)
 
-    feasible = np.isfinite(minimum_costs)
     feasible_columns = np.flatnonzero(feasible)
     if feasible_columns.size == 0:
         return
@@ -261,11 +260,10 @@ def merge_child_tables(
 
     Child state i represents i + 1 clusters. States i and j produce parent
     state i + j + 1. Leave impossible states at their initialized values.
-
-    With penalties enabled, compare penalized cost, outlier count, then raw
-    cost. Otherwise, prioritize outlier count only when requested; compare
-    raw cost first in other cases. Resolve remaining ties by distributing
-    clusters more evenly among children, then choosing the lower left state."""
+    With penalties, compare penalised cost, then outlier count, then raw cost.
+    Without, outlier count comes first only with prefer_fewer. Remaining ties
+    go to the more even split, then the lower left state.
+    """
     outlier_detection_enabled = settings.outlier_detection_enabled
     small_cluster_penalty_enabled = settings.small_cluster_penalty_enabled
     prioritize_fewer_outliers = settings.prioritize_fewer_outliers

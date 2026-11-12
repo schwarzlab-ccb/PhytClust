@@ -25,10 +25,16 @@ from ..algo.dp import (
     compute_dp_table,
     backtrack,
 )
-from ..algo.scoring import calculate_scores, find_score_peaks
+from ..algo.scoring import (
+    calculate_scores,
+    find_score_peaks,
+    zero_distance_groups,
+    zero_distance_splits,
+)
 from ..config import OutlierConfig, PeakConfig, RuntimeConfig
 from ..metrics.indices import AlphaIndex, cluster_alpha
 from ..utils.traversal import tree_fingerprint
+from ..validation import positive_int
 
 logger = logging.getLogger("phytclust")
 
@@ -36,12 +42,12 @@ IntMap = dict[Any, int]
 
 
 def _coerce_to_tree(obj: Any) -> Tree:
-    """
-    Read a tree from a Tree object, Newick string, or file path.
+    """Read a tree from a Tree object, Newick string, or file path.
 
-    Return Tree objects unchanged. Read existing string paths as files;
-    otherwise parse strings as Newick. Raise ValidationError for unsupported
-    input types or reading and parsing errors.
+    A string naming an existing file is read as a file; any other string must
+    contain a parenthesised Newick tree, so a mistyped path is an error rather
+    than a one-leaf tree. Raises ValidationError for other types and for read
+    or parse errors.
     """
     if isinstance(obj, Tree):
         return obj
@@ -56,13 +62,20 @@ def _coerce_to_tree(obj: Any) -> Tree:
         return read_newick(obj)
 
     if isinstance(obj, str):
+        if not obj.strip():
+            raise ValidationError("Tree input is an empty string.")
         try:
             candidate = Path(obj)
-            if candidate.exists():
+            if candidate.is_file():
                 return read_newick(candidate)
-        except OSError:
+        except (OSError, ValueError):
             pass
 
+        if "(" not in obj:
+            raise ValidationError(
+                f"No such file: {obj!r}. Pass an existing Newick file path or a "
+                "Newick string such as '((A:1,B:1):1,C:2);'."
+            )
         handle = StringIO(obj)
         return read_newick(handle)
 
@@ -80,7 +93,13 @@ class PhytClust:
     Parameters
     ----------
     tree : Bio.Phylo.BaseTree.Tree, str, or pathlib.Path
-        Input tree, Newick string, or path to a Newick file.
+        Input tree, Newick string, or path to a Newick file. A ``Tree`` object
+        is prepared in place, not copied: unnamed and duplicate nodes are
+        renamed, negative branch lengths are set to 0, missing lengths are
+        filled in, single-child nodes are merged, and ``root_taxon`` re-roots
+        it. Returned cluster maps are keyed by the leaves of this tree (with an
+        outgroup, of an internal copy). Pass ``copy.deepcopy(tree)`` to keep
+        the original unchanged.
     outgroup : str | None, default=None
         Name of the node whose subtree is excluded from clustering.
     root_taxon : str | None, default=None
@@ -88,8 +107,11 @@ class PhytClust:
     min_cluster_size : int, default=1
         Minimum number of leaves allowed in a final cluster.
     k : int | None, default=None
-        Default number of clusters for ``run()``. An explicit ``run(k=...)``
-        argument overrides this value.
+        Default number of clusters for ``run()`` when no mode argument is
+        given. ``run(k=...)`` overrides it for that call; ``top_n > 1`` or
+        ``by_resolution=True`` run a peak search instead. ``run()`` never
+        changes this attribute; the mode of the last run is recorded in
+        ``exact_k`` (the fixed k, or None after a peak search).
     max_k : int | None, default=None
         Upper bound on k for scoring / peak search. If None, derived
         from `max_k_limit * num_terminals`.
@@ -157,6 +179,7 @@ class PhytClust:
     use_penalized_beta_for_scoring: bool = False
 
     no_split_zero_length: bool = False
+    zero_length_eps: float = 1e-12
     polytomy_mode: str = "soft"
     soft_polytomy_max_degree: int = 12
     preserve_dp_tables: bool = False
@@ -171,6 +194,12 @@ class PhytClust:
     peak_config: PeakConfig = field(default_factory=PeakConfig)
 
     def __post_init__(self) -> None:
+        if self.runtime_config is None:
+            self.runtime_config = RuntimeConfig()
+        if self.peak_config is None:
+            self.peak_config = PeakConfig()
+        if self.outlier is None:
+            self.outlier = OutlierConfig()
         self.tree = _coerce_to_tree(self.tree)
 
         self.name_leaves_per_node = {}
@@ -185,18 +214,28 @@ class PhytClust:
 
         self.scores = None
         self.peaks_by_rank = None
+        self.peaks_by_resolution = None
+        self.resolution_info = None
+        self.bin_ranges_current = None
+        self.peak_ranking_details: list = []
+        self.tied_optima: dict[int, dict[str, Any]] = {}
+        self.score_plot = None
+        self.secondary_score_plot = None
+        self._support_scale: Optional[float] = None
+        self.exact_k: Optional[int] = self.k
+        self.resolution_fell_back = False
+        self.zero_length_splits: dict[int, int] = {}
         self.alpha_by_k: dict[int, dict[str, Any]] = {}
         self._alpha_index: Optional[AlphaIndex] = None
 
         self._dp_ready = False
         self._dp_cache_sig: Optional[tuple] = None
         self._dp_cap: Optional[int] = None
-        self._score_raw_arrays: Optional[tuple] = None
-        self._score_raw_cap: Optional[int] = None
-        self._score_raw_base_sig: Optional[tuple] = None
+        self._score_arrays_cache: Optional[tuple] = None
+        self._score_arrays_cap: Optional[int] = None
+        self._score_arrays_sig: Optional[tuple] = None
         self._scores_cache_sig: Optional[tuple] = None
-        self.clusters: dict[int, IntMap] = {}
-        self._last_result: Optional[dict[str, Any]] = None
+        self.cluster_maps: dict[int, IntMap] = {}
 
         user_max_k = self.max_k
         prepare_tree(self)
@@ -204,18 +243,18 @@ class PhytClust:
         self._prepared_tree_sig = (self._hash_tree(), self.outgroup)
 
     def __repr__(self) -> str:
-        parts = [f"terminals={getattr(self, 'num_terminals', 0)}"]
+        parts = [f"terminals={self.num_terminals}"]
         if self.outgroup:
             parts.append(f"outgroup={self.outgroup!r}")
-        max_k = getattr(self, "max_k", None)
+        max_k = self.max_k
         if max_k is not None:
             parts.append(f"max_k={max_k}")
-        peaks = getattr(self, "peaks_by_rank", None)
+        peaks = self.peaks_by_rank
         if peaks:
             parts.append(f"peaks={list(peaks)}")
-        elif self.k is not None:
-            parts.append(f"k={self.k}")
-        if not getattr(self, "_dp_ready", False):
+        elif self.exact_k is not None:
+            parts.append(f"k={self.exact_k}")
+        if not self._dp_ready:
             parts.append("dp=uncomputed")
         return f"PhytClust({', '.join(parts)})"
 
@@ -235,7 +274,7 @@ class PhytClust:
             self.outgroup,
             self.min_cluster_size,
             self.no_split_zero_length,
-            getattr(self, "zero_length_eps", 1e-12),
+            self.zero_length_eps,
             self.use_branch_support,
             self.min_support,
             self.support_weight,
@@ -256,9 +295,7 @@ class PhytClust:
         return (
             self._dp_cache_sig,
             self.max_k,
-            bool(getattr(self, "use_penalized_beta_for_scoring", False)),
-            float(getattr(self, "score_beta_floor_frac", 0.0) or 0.0),
-            float(getattr(self, "score_beta_floor_abs", 0.0) or 0.0),
+            self.use_penalized_beta_for_scoring,
         )
 
     def _resolve_dp_cap(self, required_cap: Optional[int]) -> int:
@@ -307,15 +344,19 @@ class PhytClust:
                 grown = min(grown, self.max_k)
             new_cap = max(needed_cap, min(grown, self.num_terminals))
 
-        self.clusters = {}
-        self.scores = None
-        self.peaks_by_rank = None
+        # Cluster maps are keyed by leaves of the rebuilt tree and are discarded.
+        # When only the cap grows, the DP is exact and smaller-k costs are
+        # unchanged, so the previous scores and peaks remain valid.
+        self.cluster_maps = {}
         self.alpha_by_k = {}
         self._alpha_index = None
-        self._scores_cache_sig = None
-        self._score_raw_arrays = None
-        self._score_raw_cap = None
-        self._score_raw_base_sig = None
+        if not sig_matches:
+            self.scores = None
+            self.peaks_by_rank = None
+            self._scores_cache_sig = None
+            self._score_arrays_cache = None
+            self._score_arrays_cap = None
+            self._score_arrays_sig = None
 
         self._dp_ready = False
         validate_clustering_parameters(self)
@@ -340,8 +381,6 @@ class PhytClust:
         1. explicit method argument ``max_k`` (applies to that call only)
         2. ``self.max_k`` if the caller set it
         3. derived cap from the current ``max_k_limit``
-
-        Method arguments apply only to the current call.
         """
         if max_k is not None:
             return min(self.num_terminals, max_k)
@@ -361,7 +400,6 @@ class PhytClust:
         """Build the result dictionary returned by ``run()``.
 
         Canonical keys are ``k_values`` (list[int]) and ``selected_k`` (int|None).
-        Legacy keys (``ks``, ``peaks``, ``k``) are retained for compatibility.
         """
         selected_k = (
             int(exact_k)
@@ -388,19 +426,20 @@ class PhytClust:
             result["k"] = int(exact_k)
         return result
 
-    def alpha_info(self, k: int, cmap: Optional[IntMap] = None) -> dict[str, Any]:
+    def alpha_info(self, k: int, cluster_map: Optional[IntMap] = None) -> dict[str, Any]:
         """Return alpha and branch statistics for a partition.
 
-        Cache results for ``get_clusters(k)``. Calculate supplied maps separately.
-        Reuse the tree's alpha index until the DP is rebuilt.
+        Results for get_clusters(k) are cached until the DP is rebuilt; a
+        supplied map is always computed.
         """
-        self._ensure_dp(required_cap=int(k))
-        cache_result = cmap is None or cmap is self.clusters.get(int(k))
-        if cmap is None:
+        k = positive_int(k, "k", error=InvalidKError)
+        self._ensure_dp(required_cap=k)
+        cache_result = cluster_map is None or cluster_map is self.cluster_maps.get(int(k))
+        if cluster_map is None:
             cached = self.alpha_by_k.get(int(k))
             if cached is not None:
                 return cached
-            cmap = self.get_clusters(k)
+            cluster_map = self.get_clusters(k)
         active_tree = (
             self._tree_wo_outgroup
             if (self.outgroup and self._tree_wo_outgroup is not None)
@@ -410,7 +449,7 @@ class PhytClust:
             self._alpha_index = AlphaIndex(active_tree)
         info = {
             "k": int(k),
-            **cluster_alpha(active_tree, cmap, index=self._alpha_index),
+            **cluster_alpha(active_tree, cluster_map, index=self._alpha_index),
         }
         if cache_result:
             self.alpha_by_k[int(k)] = info
@@ -426,13 +465,13 @@ class PhytClust:
         Alpha = mean extra-cluster branch length / mean intra-cluster branch length.
         """
         details: list[dict[str, Any]] = []
-        for k_val, cmap in zip(selected_ks, clusters):
-            info = self.alpha_info(k_val, cmap)
+        for k, cluster_map in zip(selected_ks, clusters):
+            info = self.alpha_info(k, cluster_map)
             details.append(info)
             logger.info(
                 "alpha(k=%d) = %.6g  (avg_extra=%.6g, avg_intra=%.6g, "
                 "n_extra=%d, n_intra=%d)",
-                k_val,
+                k,
                 info["alpha"],
                 info["avg_extra_branch_length"],
                 info["avg_intra_branch_length"],
@@ -446,14 +485,10 @@ class PhytClust:
         """Return the plotting settings."""
         return self.runtime_config.plot
 
-
     def get_clusters(self, k: int, *, verbose: bool = False) -> IntMap:
         """Return the exact k-cluster partition (cached after first call)."""
-        if k is None:
-            raise InvalidKError("Please provide k")
-        if k < 1:
-            raise InvalidKError("k must be >= 1")
-        self._ensure_dp(required_cap=int(k))
+        k = positive_int(k, "k", error=InvalidKError)
+        self._ensure_dp(required_cap=k)
         return self._clusters(k, verbose=verbose)
 
     def _clusters(self, k: int, *, verbose: bool = False) -> IntMap:
@@ -461,18 +496,48 @@ class PhytClust:
 
         The caller must first call ``_ensure_dp`` for the largest required k.
         """
-        if k in self.clusters:
-            return self.clusters[k]
+        if k in self.cluster_maps:
+            return self.cluster_maps[k]
 
-        cmap = backtrack(self, k, verbose=verbose)
-        self.clusters[k] = cmap
-        return cmap
+        cluster_map = backtrack(self, k, verbose=verbose)
+        self.cluster_maps[k] = cluster_map
+        return cluster_map
 
+    def _check_zero_distance_splits(self, cluster_counts: list[int]) -> None:
+        """Warn when a selected partition separates leaves at zero distance.
+
+        Records ``{k: number of split groups}`` in ``zero_length_splits``.
+        """
+        self.zero_length_splits = {}
+        if not cluster_counts:
+            return
+        groups = zero_distance_groups(self)
+        if not groups:
+            return
+        details = []
+        for count in cluster_counts:
+            cluster_map = self.cluster_maps.get(count)
+            if cluster_map is None:
+                continue
+            split = zero_distance_splits(groups, cluster_map)
+            if split:
+                self.zero_length_splits[count] = len(split)
+                names = sorted(str(leaf.name) for leaf in split[0])[:2]
+                details.append(
+                    f"k={count}: {len(split)} group(s), e.g. {names[0]!r} and {names[1]!r}"
+                )
+        if details:
+            logger.warning(
+                "Selected partitions separate leaves at zero distance from each "
+                "other (for example identical sequences): %s. Interpret these "
+                "clusters with caution.",
+                "; ".join(details),
+            )
 
     def _no_peaks_fallback(self) -> list[IntMap]:
         """Reset selection state and return no clusters."""
-        logger.info("No score peaks found.")
-        self.k = None
+        logger.warning("No score peaks found; no partition was selected.")
+        self.exact_k = None
         self.peaks_by_rank = []
         return []
 
@@ -488,6 +553,9 @@ class PhytClust:
         peak_config: Optional[PeakConfig] = None,
     ) -> list[IntMap]:
         """Internal shared implementation for global and resolution peak modes."""
+        self.exact_k = None
+        if resolution_on:
+            self.resolution_fell_back = False
         from_user = max_k is None and self._max_k_is_user_set()
         eff_max_k = self._effective_max_k(max_k)
         self.max_k = eff_max_k
@@ -495,7 +563,18 @@ class PhytClust:
             self._auto_max_k = eff_max_k
 
         if eff_max_k < 4:
-            raise InvalidKError("max_k must be at least 4.")
+            if self.num_terminals < 4:
+                raise InvalidKError(
+                    f"Automatic selection of k needs at least 4 leaves; this tree "
+                    f"has {self.num_terminals}. Use run(k=...) for a fixed k."
+                )
+            if max_k is not None or from_user:
+                raise InvalidKError(f"max_k must be at least 4 (got {eff_max_k}).")
+            raise InvalidKError(
+                f"max_k_limit={self.max_k_limit} gives max_k={eff_max_k} for "
+                f"{self.num_terminals} leaves; automatic selection needs at least 4. "
+                "Increase max_k_limit or pass max_k."
+            )
 
         self._ensure_dp(required_cap=eff_max_k)
 
@@ -515,8 +594,20 @@ class PhytClust:
         active_peak_config = peak_config or self.peak_config
 
         if resolution_on:
-            if score_k_count < 50:
+            min_scores = active_peak_config.resolution_min_scores
+            if score_k_count < min_scores:
                 top = max(1, min(max(top_n, 3), score_k_count - 1))
+                logger.warning(
+                    "Resolution mode needs at least %d scored cluster counts; "
+                    "this run has %d (max_k=%d). Running a global search for the "
+                    "top %d peaks instead. Lower PeakConfig.resolution_min_scores "
+                    "to use resolution mode on this tree.",
+                    min_scores,
+                    score_k_count,
+                    eff_max_k,
+                    top,
+                )
+                self.resolution_fell_back = True
                 return self._run_peak_mode(
                     resolution_on=False,
                     top_n=top,
@@ -554,20 +645,20 @@ class PhytClust:
 
         if (not resolution_on) and compute_all_clusters:
             self._ensure_dp(required_cap=eff_max_k)
-            for k_val in range(1, eff_max_k + 1):
+            for k in range(1, eff_max_k + 1):
                 try:
-                    self._clusters(k_val)
+                    self._clusters(k)
                 except (MissingDPTableError, InvalidClusteringError):
                     continue
         else:
-            for k_val in self.peaks_by_rank or []:
-                self.get_clusters(k_val)
+            for k in self.peaks_by_rank or []:
+                self.get_clusters(k)
 
-        self.k = None
+        self._check_zero_distance_splits(list(self.peaks_by_rank or []))
         return [
-            self.clusters[kv]
-            for kv in (self.peaks_by_rank or [])
-            if kv in self.clusters
+            self.cluster_maps[k]
+            for k in (self.peaks_by_rank or [])
+            if k in self.cluster_maps
         ]
 
     def best_global(
@@ -606,7 +697,8 @@ class PhytClust:
     ) -> list[IntMap]:
         """Select up to ``top_n`` score peaks per logarithmic resolution bin.
 
-        With fewer than 50 scores, use a global search for at least three peaks.
+        With fewer than ``PeakConfig.resolution_min_scores`` scores (default 50),
+        warn and use a global search for at least three peaks.
         """
         if top_n < 1:
             raise InvalidKError("top_n must be at least 1.")
@@ -620,7 +712,6 @@ class PhytClust:
             plot_scores=plot_scores,
             peak_config=peak_config,
         )
-
 
     def run(
         self,
@@ -660,16 +751,15 @@ class PhytClust:
             k_values : list[int] — canonical selected k values
             selected_k : int | None — first selected k for convenience
             ks : list[int] — selected k values
-            clusters : list[dict] — cluster maps in rank order
+            clusters : list[dict] — global rank order, or increasing k in resolution mode
             scores : ndarray | None — score vector
-            peaks : list[int] — same as ks (for convenience)
         """
         saved_limit = self.max_k_limit
         if max_k_limit is not None:
             self.max_k_limit = max_k_limit
 
         try:
-            result = self._run_inner(
+            result = self._select_mode(
                 k=k,
                 top_n=top_n,
                 by_resolution=by_resolution,
@@ -681,10 +771,9 @@ class PhytClust:
         finally:
             self.max_k_limit = saved_limit
 
-        self._last_result = result
         return result
 
-    def _run_inner(
+    def _select_mode(
         self,
         *,
         k: Optional[int],
@@ -695,10 +784,10 @@ class PhytClust:
         plot_scores: bool,
         peak_config: Optional[PeakConfig],
     ) -> dict[str, Any]:
-        k_val = k if k is not None else (None if by_resolution else self.k)
-        if k_val is not None:
-            if k_val < 1:
-                raise InvalidKError("k must be >= 1.")
+        use_default_k = k is None and not by_resolution and top_n == 1
+        k = k if k is not None else (self.k if use_default_k else None)
+        if k is not None:
+            k = positive_int(k, "k", error=InvalidKError)
             if by_resolution:
                 raise ConfigurationError(
                     "Cannot combine `k` with `by_resolution=True`."
@@ -706,16 +795,17 @@ class PhytClust:
             if top_n != 1:
                 raise ConfigurationError("top_n must be 1 when k is specified.")
 
-            self._ensure_dp(required_cap=int(k_val))
-            cmap = self.get_clusters(k_val)
+            self._ensure_dp(required_cap=int(k))
+            cluster_map = self.get_clusters(k)
+            self._check_zero_distance_splits([int(k)])
 
-            self.k = int(k_val)
-            self.peaks_by_rank = [int(k_val)]
+            self.exact_k = int(k)
+            self.peaks_by_rank = [int(k)]
             return self._build_run_result(
                 mode="k",
-                clusters=[cmap],
-                selected_ks=[int(k_val)],
-                exact_k=int(k_val),
+                clusters=[cluster_map],
+                selected_ks=[int(k)],
+                exact_k=int(k),
                 include_scores=False,
             )
 
@@ -731,7 +821,7 @@ class PhytClust:
                 peak_config=peak_config or self.peak_config,
             )
             return self._build_run_result(
-                mode="resolution",
+                mode="global" if self.resolution_fell_back else "resolution",
                 clusters=clusters,
                 selected_ks=list(self.peaks_by_rank or []),
             )
@@ -749,7 +839,6 @@ class PhytClust:
             selected_ks=list(self.peaks_by_rank or []),
         )
 
-
     def plot(self, results_dir: Optional[str] = None, **kwargs) -> None:
         """Plot clustering results (requires matplotlib)."""
         from ..viz.cluster import plot_clusters
@@ -760,17 +849,21 @@ class PhytClust:
         self,
         results_dir: str,
         top_n: int = 1,
-        filename: str = "phytclust_results.tsv",
-        outlier: bool = True,
+        filename: Optional[str] = None,
+        outlier: Optional[bool] = None,
         k: Optional[int] = None,
         n: Optional[int] = None,
         output_all: bool = False,
     ) -> Optional[str]:
         """Save clustering results as a tab-separated file.
 
-        ``k`` is the standard selector name. ``n`` is retained as a backwards-
-        compatible alias and is only used if ``k`` is not provided.
+        ``filename`` and ``outlier`` default to ``runtime_config.save``
+        (``tsv_name`` and ``outlier``). ``n`` is an alias for ``k``.
         """
+        if filename is None:
+            filename = self.runtime_config.save.tsv_name
+        if outlier is None:
+            outlier = self.runtime_config.save.outlier
         if n is not None and k is None:
             warnings.warn(
                 "Parameter 'n' is deprecated; use 'k' instead.",

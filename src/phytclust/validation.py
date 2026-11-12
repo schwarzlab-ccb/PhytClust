@@ -2,16 +2,27 @@ from __future__ import annotations
 
 import logging
 import math
+from numbers import Integral
 import string
 from collections import deque
 from typing import Any
 
+import numpy as np
 from Bio.Phylo.BaseTree import Clade, Tree
 
-from .exceptions import InvalidTreeError
+from .exceptions import ConfigurationError, InvalidTreeError
 from .utils.traversal import LeafSpans, iter_clades, leaf_maps, nonterminals, terminals
 
-logger = logging.getLogger(__name__)
+
+def positive_int(value, name, *, minimum=1, error=ConfigurationError) -> int:
+    """Return ``value`` as an int if it is an integer of at least ``minimum``."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < minimum:
+        if minimum == 1:
+            raise error(f"{name} must be a positive integer.")
+        raise error(f"{name} must be an integer of at least {minimum}.")
+    return int(value)
+
+logger = logging.getLogger("phytclust")
 
 
 def _named_clade(tree: Tree, name: str) -> Clade:
@@ -64,14 +75,11 @@ def validate_and_set_outgroup(
     outgroup: str | None,
     root_taxon: str | None = None,
 ) -> tuple[Tree, str | None]:
-    """
-    Prepare the tree for clustering and return ``(tree, outgroup)``.
+    """Prepare the tree for clustering and return ``(tree, outgroup)``.
 
-    Check the outgroup name, normalize branch lengths, and root the tree
-    if requested. Collapse single-child nodes except the outgroup and its
-    parent, then give each node a unique name.
-
-    Modify the tree in place. Root and outgroup names must each match one node.
+    Checks the outgroup name, normalises branch lengths, roots if requested,
+    collapses single-child nodes (except the outgroup and its parent) and gives
+    every node a unique name. Modifies the tree in place.
     """
     if outgroup is not None:
         _named_clade(tree, outgroup)
@@ -89,7 +97,7 @@ def prune_outgroup(
     """
     Remove the outgroup from ``tree`` and return the leaf maps that remain.
     Tree is modified in-place.
-    If the outgroup is at root with two children, we keep the sibling as the new root.
+    Outgroup under a bifurcating root: the sibling becomes the root.
     Otherwise remove the outgroup subtree and collapse its parent if unary,
     preserving distances between remaining leaves.
     When replacing a parent with its remaining child, keep the parent's
@@ -112,9 +120,19 @@ def prune_outgroup(
         _retain_parent_confidence(tree.root, sibling)
         tree.root = sibling
     else:
-        path = tree.get_path(outgroup_clade)
-        parent = tree.root if len(path) == 1 else path[-2]
+        ancestors = [tree.root] + tree.get_path(outgroup_clade)[:-1]
+        level = len(ancestors) - 1
+        parent = ancestors[level]
         parent.clades.remove(outgroup_clade)
+        # Also remove ancestors left without children; they would become
+        # spurious leaves.
+        while not parent.clades:
+            if parent is tree.root:
+                raise InvalidTreeError("Removing the outgroup leaves an empty tree.")
+            removed = parent
+            level -= 1
+            parent = ancestors[level]
+            parent.clades.remove(removed)
         if len(parent.clades) == 1:
             child = parent.clades[0]
             _retain_parent_confidence(parent, child)
@@ -124,15 +142,10 @@ def prune_outgroup(
                 child.branch_length = (child.branch_length or 0.0) + (
                     parent.branch_length or 0.0
                 )
-                grandparent = tree.root if len(path) == 2 else path[-3]
+                grandparent = ancestors[level - 1]
                 grandparent.clades[grandparent.clades.index(parent)] = child
 
     return leaf_maps(tree.root)
-
-
-def is_outgroup_valid(tree: Tree, outgroup: str) -> bool:
-    """True if any clade in the tree has name == outgroup."""
-    return any(node.name == outgroup for node in iter_clades(tree.root))
 
 
 def rename_nodes(tree: Tree, outgroup: str | None = None) -> None:
@@ -267,8 +280,8 @@ def ensure_branch_lengths(tree: Tree) -> None:
     if n_negative:
         logger.warning(
             "%d of %d branches have a negative length; they are set to "
-            "0.0, which can produce zero within-cluster dispersion and "
-            "undefined (inf) alpha for the affected clusters.",
+            "0.0. The alpha statistic can be infinite when the "
+            "within-cluster average branch length is zero.",
             n_negative,
             len(clades),
         )

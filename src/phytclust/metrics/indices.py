@@ -12,8 +12,9 @@ from ..exceptions import DataError
 def colless_index_calc(tree: Tree) -> int:
     """Return the sum of child leaf-count differences at binary nodes.
 
-    Skip nodes with one or more than two children. For a binary tree, this
-    is the Colless index; for other trees it is a partial binary-node sum."""
+    Nodes with one or more than two children are skipped, so for non-binary
+    trees this is a partial sum.
+    """
     leaf_count: dict[Any, int] = {}
     colless_sum = 0
     for node in iter_clades(tree.root, "postorder"):
@@ -29,8 +30,8 @@ def colless_index_calc(tree: Tree) -> int:
 def normalized_colless(tree: Tree) -> float:
     """Divide the binary-node Colless sum by the maximum for a binary tree.
 
-    Return zero for at most two leaves. Skip non-binary nodes; this is not
-    a generalized Colless index for multifurcations."""
+    Returns 0 for at most two leaves; non-binary nodes are skipped.
+    """
     colless_sum = colless_index_calc(tree)
     n = sum(1 for _ in terminals(tree.root))
     if n <= 2:
@@ -229,20 +230,19 @@ def gini_coefficient(proportions_or_tree: List[float] | Tree) -> float:
 
 
 def variance_ratio(tree: Tree) -> float:
-    """Compatibility name for the internal-to-terminal standard-deviation ratio."""
+    """Internal / terminal branch-length SD ratio."""
     return internal_to_terminal_std_ratio(tree)
 
 
 def colless_ratio(tree: Tree) -> float:
-    """Backward-compatible normalized Colless ratio in [0, 1] for binary trees."""
+    """Normalised Colless index in [0, 1] for binary trees."""
     return normalized_colless(tree)
 
 
 class AlphaIndex:
     """Store leaf spans and edge lengths for repeated alpha calculations.
 
-    The arrays describe the tree when this index was built. Rebuild after
-    changes to topology, child order, or branch lengths.
+    Rebuild after any change to topology, child order or branch lengths.
     """
 
     def __init__(self, tree: Any):
@@ -303,19 +303,13 @@ class AlphaIndex:
 def cluster_alpha(
     tree: Any, cmap: dict[Clade, int], index: Optional[AlphaIndex] = None
 ) -> dict[str, Any]:
-    """
-    Alpha = mean extra-cluster branch length / mean intra-cluster branch length.
+    """Alpha = mean extra-cluster branch length / mean intra-cluster branch length.
 
-    Every edge is counted once, as the branch leading into its child node.
-    Intra-cluster edges lie below a cluster's root; extra-cluster edges form
-    the backbone, including each cluster's stem. A soft-polytomy group, whose
-    members are several children of one polytomy, is treated as the clade it
-    forms at its implicit zero-length node: edges into its members are intra,
-    and the zero-length stem is not an edge of the tree. The root has no
-    incoming edge and is not counted, even when it carries a
-    ``branch_length`` (as the new root does after outgroup pruning).
-    ``None`` is treated as 0. Pass ``index`` to reuse the per-tree arrays
-    across clusterings of the same tree.
+    Each edge is counted once, as the branch into its child. Intra-cluster
+    edges lie below a cluster's root; the rest, including each cluster's stem,
+    are extra-cluster. A soft-polytomy group counts as the clade at its
+    implicit zero-length node. The root's own branch_length is ignored; None
+    lengths count as 0. Pass index to reuse the per-tree arrays.
     """
     if index is None:
         index = AlphaIndex(tree)
@@ -345,7 +339,7 @@ def cluster_alpha(
 
 
 def variance_indices(tree: Tree) -> dict[str, float]:
-    """Return standard-deviation metrics under their historical dictionary keys."""
+    """Branch-length SDs as a dict."""
     return {
         "branch_length_variance": branch_length_standard_deviation(tree),
         "total_length_variation": root_to_tip_standard_deviation(tree),
@@ -355,7 +349,6 @@ def variance_indices(tree: Tree) -> dict[str, float]:
     }
 
 
-# Compatibility names retain the existing standard-deviation formulas.
 calculate_variance_branch_length = branch_length_standard_deviation
 total_branch_lengths = root_to_tip_lengths
 calculate_total_length_variation = root_to_tip_standard_deviation

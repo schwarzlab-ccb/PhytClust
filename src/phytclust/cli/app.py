@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import re
 import sys
 import textwrap
 import logging
@@ -16,7 +17,7 @@ from copy import deepcopy
 from Bio import Phylo
 from ..algo.core import PhytClust
 from ..config import OutlierConfig, PeakConfig, build_runtime_config
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, PhytClustError
 from pathlib import Path
 from importlib import resources
 
@@ -32,19 +33,21 @@ except ImportError:
 console = Console(stderr=True) if Console else None
 output_console = Console() if Console else None
 
-LOG = logging.getLogger("phytclust.cli")
+logger = logging.getLogger("phytclust")
 
 
-def print_banner():
+def print_banner(*, no_color: bool = False):
     try:
         text = (
             resources.files("phytclust")
             .joinpath("assets", "ascii_logo.txt")
             .read_text(encoding="utf-8")
         )
+        if no_color:
+            text = re.sub(r"\x1b\[[0-9;]*m", "", text)
         print(text)
     except (OSError, ModuleNotFoundError):
-        LOG.debug("ascii_logo.txt not found; skipping banner.")
+        logger.debug("ascii_logo.txt not found; skipping banner.")
 
 
 def _positive_int(value: str) -> int:
@@ -64,15 +67,6 @@ def _min_int(minimum_value: int):
     return _check
 
 
-def _existing_path_or_stdin(value: str) -> pathlib.Path | str:
-    if value == "-":
-        return value
-    path = pathlib.Path(value)
-    if not path.is_file():
-        raise argparse.ArgumentTypeError(f"file not found: {value}")
-    return path
-
-
 def _existing_path(value: str) -> pathlib.Path:
     path = pathlib.Path(value)
     if not path.is_file():
@@ -80,9 +74,11 @@ def _existing_path(value: str) -> pathlib.Path:
     return path
 
 
+def _existing_path_or_stdin(value: str) -> pathlib.Path | str:
+    return value if value == "-" else _existing_path(value)
+
+
 def _package_version() -> str:
-    if version is None:
-        return "unknown"
     try:
         return version("phytclust")
     except PackageNotFoundError:
@@ -119,7 +115,7 @@ def _warn_deprecated_key(old: str, new: str) -> None:
     """Report a deprecated setting and its replacement."""
     message = f"config key '{old}' is deprecated, use '{new}' instead."
     warnings.warn(message, DeprecationWarning, stacklevel=3)
-    LOG.warning("config: %s", message)
+    logger.warning("config: %s", message)
 
 
 def _config_section(config: dict[str, Any], name: str) -> dict[str, Any]:
@@ -142,15 +138,26 @@ def _merge_settings(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str
 
 
 def _runtime_overrides_from_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Combine plotting and save sections with nested runtime overrides."""
+    """Combine plotting and save sections with nested runtime overrides.
+
+    A top-level ``plot`` section may be nested (``plot: {scores: ..., cluster:
+    ...}``) or flat (cluster-plot keys; ``scores_plot`` holds score-plot keys).
+    """
     overrides: dict[str, Any] = {}
-    cluster_settings = _config_section(config, "plot")
+    plot_settings = dict(_config_section(config, "plot"))
+    nested_plot = {
+        name: dict(plot_settings.pop(name))
+        for name in ("scores", "cluster")
+        if isinstance(plot_settings.get(name), dict)
+    }
     score_settings = _config_section(config, "scores_plot")
     save_settings = dict(_config_section(config, "save"))
-    if cluster_settings:
-        overrides.setdefault("plot", {})["cluster"] = dict(cluster_settings)
+    if nested_plot:
+        overrides["plot"] = nested_plot
+    if plot_settings:
+        overrides.setdefault("plot", {}).setdefault("cluster", {}).update(plot_settings)
     if score_settings:
-        overrides.setdefault("plot", {})["scores"] = dict(score_settings)
+        overrides.setdefault("plot", {}).setdefault("scores", {}).update(score_settings)
     if "csv_name" in save_settings:
         _warn_deprecated_key("save.csv_name", "save.tsv_name")
         if save_settings.get("tsv_name") is None:
@@ -180,7 +187,7 @@ def _peak_config_from_config(
             if key in field_names:
                 setattr(peak_config, key, val)
             else:
-                LOG.warning("config: unknown key 'peak.%s' ignored.", key)
+                logger.warning("config: unknown key 'peak.%s' ignored.", key)
 
     for key, val in (cli_overrides or {}).items():
         if val is not None and key in field_names:
@@ -211,7 +218,7 @@ def _add_common_run_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--save-all-k",
         action="store_true",
-        help="Write tsv rows for *every* k from 1..max_k (can be large!).",
+        help="One column per k from 1 to max_k.",
     )
     parser.add_argument(
         "--tsv-name",
@@ -309,7 +316,7 @@ class RunPhase:
         elapsed = time.perf_counter() - self.started_at
         if self.enabled and self.status:
             self.status.stop()
-        LOG.info("%s completed in %.3fs", self.label, elapsed)
+        logger.info("%s completed in %.3fs", self.label, elapsed)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -323,8 +330,8 @@ def build_parser() -> argparse.ArgumentParser:
           # global validity-index peaks: top 3, cap k at 200
           phytclust data/tree.nwk --top-n 3 --max-k 200 --save-fig --out-dir out
 
-          # one peak per 4 log-bins, headless save
-          phytclust data/tree.nwk --resolution --bins 4 --no-plot --save-all-k --save-fig
+          # one peak per 4 log-bins, every k in the table
+          phytclust data/tree.nwk --resolution --bins 4 --save-all-k --save-fig
 
           # launch the web GUI (see `phytclust gui --help`)
           phytclust gui --port 8000
@@ -534,7 +541,7 @@ def main(argv=None) -> int:
 
         def report_warning(message, category, filename, lineno, file=None, line=None):
             if not issubclass(category, DeprecationWarning):
-                LOG.warning("%s", message)
+                logger.warning("%s", message)
 
         warnings.showwarning = report_warning
         return _run_cli(argv)
@@ -568,7 +575,7 @@ def _run_cli(argv=None) -> int:
         return 2
 
     if args.include_k2_deprecated:
-        LOG.warning(
+        logger.warning(
             "--include-k2 is deprecated: k=2 is now a candidate by default. "
             "Use --exclude-k2 to drop it."
         )
@@ -576,6 +583,7 @@ def _run_cli(argv=None) -> int:
     show_phase_ui = bool(console is not None and (sys.stderr.isatty() or args.progress))
 
     if sys.stdout.isatty() and not args.quiet:
+        print_banner(no_color=args.no_color or "NO_COLOR" in os.environ)
         _emit_header(args)
 
     if (
@@ -583,7 +591,7 @@ def _run_cli(argv=None) -> int:
         and sys.platform.startswith("linux")
         and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     ):
-        LOG.warning(
+        logger.warning(
             "No display found; ignoring --plot. Use --save-fig to write figures."
         )
         args.plot = False
@@ -616,7 +624,7 @@ def _run_cli(argv=None) -> int:
             else None
         )
     except ConfigurationError as exc:
-        LOG.error("%s", exc)
+        logger.error("%s", exc)
         return 2
 
     plot_settings = {
@@ -641,7 +649,7 @@ def _run_cli(argv=None) -> int:
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            LOG.error("Cannot create output directory %s: %s", out_dir, exc)
+            logger.error("Cannot create output directory %s: %s", out_dir, exc)
             return 2
         args.out_dir = str(out_dir)
 
@@ -650,7 +658,7 @@ def _run_cli(argv=None) -> int:
             handle: Any = sys.stdin if args.tree == "-" else args.tree
             tree = Phylo.read(handle, "newick")
     except Exception as exc:
-        LOG.error("Cannot read tree: %s", exc)
+        logger.error("Cannot read tree: %s", exc)
         return 2
 
     try:
@@ -670,14 +678,14 @@ def _run_cli(argv=None) -> int:
                 no_split_zero_length=args.no_split_zero_length,
                 runtime_config=runtime_config,
             )
-        LOG.info("Tree terminals (after outgroup handling): %d", pc.num_terminals)
+        logger.info("Tree terminals (after outgroup handling): %d", pc.num_terminals)
     except Exception as exc:
-        LOG.error("Failed to initialize PhytClust: %s", exc)
+        logger.error("Failed to initialize PhytClust: %s", exc)
         return 1
 
     try:
         with RunPhase(show_phase_ui, "clustering"):
-            LOG.info(
+            logger.info(
                 "Running PhytClust (k=%s, top_n=%d, resolution=%s, max_k=%s)…",
                 args.k or "auto",
                 args.top_n,
@@ -701,30 +709,23 @@ def _run_cli(argv=None) -> int:
             result = pc.run(**run_kwargs)
             run_elapsed = time.perf_counter() - run_started_at
 
-            LOG.debug("Clustering took %.3fs", run_elapsed)
+            logger.debug("Clustering took %.3fs", run_elapsed)
 
-            selected_cluster_counts = []
-            if isinstance(result, dict):
-                if "k_values" in result and result["k_values"] is not None:
-                    selected_cluster_counts = [int(x) for x in result["k_values"]]
-                elif "ks" in result and result["ks"] is not None:
-                    selected_cluster_counts = [int(x) for x in result["ks"]]
-                elif "k" in result and result["k"] is not None:
-                    selected_cluster_counts = [int(result["k"])]
+            selected_k = [int(x) for x in result["k_values"]]
 
-            if selected_cluster_counts:
-                LOG.info(
+            if selected_k:
+                logger.info(
                     "Selected k: %s",
-                    selected_cluster_counts
-                    if len(selected_cluster_counts) > 1
-                    else selected_cluster_counts[0],
+                    selected_k
+                    if len(selected_k) > 1
+                    else selected_k[0],
                 )
 
-    except (ConfigurationError, ValueError) as e:
-        LOG.error("Clustering failed: %s", e)
+    except (PhytClustError, ValueError) as e:
+        logger.error("Clustering failed: %s", e)
         return 1
     except Exception as exc:
-        LOG.error("Unexpected error during clustering: %s", exc)
+        logger.error("Unexpected error during clustering: %s", exc)
         return 1
 
     plotting_failed = False
@@ -737,11 +738,11 @@ def _run_cli(argv=None) -> int:
                     ),
                     save=(args.save_fig or args.save_tree),
                     k=args.k,
-                    top_n=max(1, len(selected_cluster_counts)),
+                    top_n=max(1, len(selected_k)),
                     dpi=args.dpi,
                     **plot_settings,
                 )
-                scores_fig = getattr(pc, "plot_of_scores", None)
+                scores_fig = pc.score_plot
                 if args.save_fig and scores_fig is not None:
                     scores_fig.savefig(
                         Path(args.out_dir) / "scores.png",
@@ -749,7 +750,7 @@ def _run_cli(argv=None) -> int:
                         bbox_inches="tight",
                     )
     except Exception as exc:
-        LOG.error("Could not create the requested plots: %s", exc)
+        logger.error("Could not create the requested plots: %s", exc)
         plotting_failed = True
 
     if not args.no_tsv:
@@ -764,40 +765,40 @@ def _run_cli(argv=None) -> int:
                     ),
                     outlier=(False if args.no_outlier else save_default_outlier),
                     output_all=args.save_all_k,
-                    top_n=max(1, len(selected_cluster_counts)),
+                    top_n=max(1, len(selected_k)),
                 )
         except Exception as exc:
-            LOG.error("Failed to write tsv: %s", exc)
+            logger.error("Failed to write tsv: %s", exc)
             return 1
 
     if will_write_anything and not args.quiet:
         _emit_artifacts(args.out_dir)
 
     total = time.perf_counter() - started_at
-    LOG.info("Total runtime: %.3fs", total)
+    logger.info("Total runtime: %.3fs", total)
     if not args.quiet:
         _emit_summary(
             pc,
-            selected_cluster_counts,
+            selected_k,
             args.out_dir if will_write_anything else None,
             total if args.time else None,
         )
 
     if not plotting_failed:
-        LOG.info("Done.")
+        logger.info("Done.")
     return 1 if plotting_failed else 0
 
 
 def _emit_summary(
-    pc: Any, selected_cluster_counts: list[int], out_dir: Any, total: Any
+    pc: Any, selected_k: list[int], out_dir: Any, total: Any
 ) -> None:
     """Print selected partitions and their output location."""
     rows = []
     threshold = (
         pc.outlier.size_threshold if pc.outlier.size_threshold is not None else 2
     )
-    for rank, count in enumerate(selected_cluster_counts, start=1):
-        cluster_map = pc.clusters.get(count)
+    for rank, count in enumerate(selected_k, start=1):
+        cluster_map = pc.cluster_maps.get(count)
         if not cluster_map:
             continue
         sizes: dict[int, int] = {}
@@ -828,7 +829,9 @@ def _emit_summary(
         else:
             output_console.print("No partitions selected.")
         if out_dir is not None:
-            output_console.print(Text(f"Results: {Path(out_dir).resolve()}"))
+            output_console.print(
+                Text(f"Output directory:\n{Path(out_dir).resolve()}"), soft_wrap=True
+            )
         if total is not None:
             output_console.print(Text(f"Elapsed: {total:.2f}s"))
     else:
@@ -839,7 +842,7 @@ def _emit_summary(
         else:
             print("No partitions selected.")
         if out_dir is not None:
-            print(f"Results: {Path(out_dir).resolve()}")
+            print(f"Output directory:\n{Path(out_dir).resolve()}")
         if total is not None:
             print(f"Elapsed: {total:.2f}s")
 
@@ -853,11 +856,12 @@ def _emit_header(args: argparse.Namespace) -> None:
     )
     if console is not None and Text is not None:
         header = Text(f"PhytClust {_package_version()}", style="bold")
-        header.append(f"  ·  {mode}")
         console.print(header)
+        console.print(Text(f"Mode: {mode}"))
         console.print(Text(f"Tree: {args.tree}"))
     else:
-        print(f"PhytClust {_package_version()} | {mode}", file=sys.stderr)
+        print(f"PhytClust {_package_version()}", file=sys.stderr)
+        print(f"Mode: {mode}", file=sys.stderr)
         print(f"Tree: {args.tree}", file=sys.stderr)
 
 
@@ -869,7 +873,7 @@ def _emit_artifacts(out_dir: str) -> None:
         directory = Path(out_dir)
         files = sorted(path.name for path in directory.iterdir() if path.is_file())
     except OSError as exc:
-        LOG.debug("Could not list output files: %s", exc)
+        logger.debug("Could not list output files: %s", exc)
         return
     if files:
         message = "Files: " + ", ".join(files)

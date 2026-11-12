@@ -11,7 +11,6 @@
 
 from .table import (
     backtrack,
-    cluster_map,
     compute_dp_table,
     prepare_tree,
     validate_clustering_parameters,
@@ -20,7 +19,6 @@ from .tied_partitions import enumerate_tied_optima
 
 __all__ = [
     "backtrack",
-    "cluster_map",
     "compute_dp_table",
     "enumerate_tied_optima",
     "prepare_tree",

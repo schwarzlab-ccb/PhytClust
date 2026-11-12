@@ -1,8 +1,7 @@
 """Enumerate partitions tied for the optimal cost, up to a configured limit.
 
-The DP selects one partition using cost, outlier, and cluster-allocation
-preferences. List that partition first, followed by other cost ties.
-Enumeration requires the child DP tables to be preserved.
+The partition the DP chose comes first. Needs the child DP tables, so
+preserve_dp_tables must be set.
 """
 
 from typing import Any, Optional
@@ -199,19 +198,19 @@ class _OptimalPartitionEnumerator:
         child_count = len(children)
         all_children_mask = (1 << child_count) - 1
         max_cluster_count = len(self.table(node_id)) - 1
-        min_cluster_size = getattr(clustering, "min_cluster_size", 1)
+        min_cluster_size = clustering.min_cluster_size
 
         atom_costs = [child_subtree_cluster_cost(c, clustering) for c in children]
         child_leaves = [clustering.num_leaves_per_node[c] for c in children]
 
-        block_leaves = [0] * (all_children_mask + 1)
-        block_cost = [0.0] * (all_children_mask + 1)
+        group_leaves = [0] * (all_children_mask + 1)
+        group_cost = [0.0] * (all_children_mask + 1)
         for mask in range(1, all_children_mask + 1):
             lsb = mask & -mask
             i = lsb.bit_length() - 1
             prev = mask ^ lsb
-            block_leaves[mask] = block_leaves[prev] + child_leaves[i]
-            block_cost[mask] = block_cost[prev] + atom_costs[i]
+            group_leaves[mask] = group_leaves[prev] + child_leaves[i]
+            group_cost[mask] = group_cost[prev] + atom_costs[i]
 
         transitions: dict[tuple, list] = {}
         dp: dict[int, dict[int, float]] = {0: {0: 0.0}}
@@ -257,16 +256,16 @@ class _OptimalPartitionEnumerator:
 
                 sub = remaining_children_mask ^ first_remaining_child_bit
                 while sub:
-                    block = first_remaining_child_bit | sub
+                    group = first_remaining_child_bit | sub
                     if (
-                        block.bit_count() >= 2
-                        and np.isfinite(block_cost[block])
-                        and block_leaves[block] >= min_cluster_size
+                        group.bit_count() >= 2
+                        and np.isfinite(group_cost[group])
+                        and group_leaves[group] >= min_cluster_size
                     ):
                         next_cluster_count = current_cluster_count + 1
                         if next_cluster_count <= max_cluster_count + 1:
-                            next_children_mask = mask | block
-                            candidate_cost = base + block_cost[block]
+                            next_children_mask = mask | group
+                            candidate_cost = base + group_cost[group]
                             dp.setdefault(next_children_mask, {})
                             if candidate_cost < dp[next_children_mask].get(
                                 next_cluster_count, np.inf
@@ -280,7 +279,7 @@ class _OptimalPartitionEnumerator:
                                 (
                                     mask,
                                     current_cluster_count,
-                                    block,
+                                    group,
                                     None,
                                     candidate_cost,
                                 )
@@ -317,10 +316,10 @@ class _OptimalPartitionEnumerator:
         for (
             previous_children_mask,
             previous_cluster_count,
-            block,
+            group,
             child_state,
         ) in optimal.get((mask, q), []):
-            bits = [i for i in range(len(children)) if block & (1 << i)]
+            bits = [i for i in range(len(children)) if group & (1 << i)]
             if child_state is None:
                 tail = [((tuple(children[i] for i in bits)),)]
             else:
@@ -341,14 +340,14 @@ class _OptimalPartitionEnumerator:
 
 def _as_cluster_map(clustering, solution) -> dict[Any, int]:
     """Turn a tuple of node groups into the terminal -> cluster id map."""
-    name_leaves = getattr(clustering, "name_leaves_per_node", None)
+    name_leaves = clustering.name_leaves_per_node
     clusters: dict[Any, int] = {}
     for cluster_id, group in enumerate(solution):
         for group_node in group:
-            terms = name_leaves.get(group_node) if name_leaves is not None else None
-            if terms is None:
-                terms = terminals(group_node)
-            for terminal in terms:
+            leaves = name_leaves.get(group_node) if name_leaves is not None else None
+            if leaves is None:
+                leaves = terminals(group_node)
+            for terminal in leaves:
                 clusters[terminal] = cluster_id
     return clusters
 
@@ -377,9 +376,8 @@ def enumerate_tied_optima(
     k : int
         Number of clusters.
     max_solutions : int, optional
-        Cap on returned partitions; defaults to ``clustering.max_tied_optima``. The
-        enumeration stops at the max_solutions and reports ``truncated``, so a tie whose
-        returned list stays bounded.
+        Cap on returned partitions; defaults to ``clustering.max_tied_optima``.
+        Enumeration stops at the cap and the result is flagged ``truncated``.
     chosen : dict, optional
         The partition ``backtrack`` returned for this k, listed first in the
         result. ``backtrack`` passes it in directly; when omitted it is looked
@@ -398,7 +396,7 @@ def enumerate_tied_optima(
             "outlier.prefer_fewer=True, which minimises the outlier count "
             "before cost and so does not select on cost ties alone."
         )
-    if not getattr(clustering, "_dp_ready", False):
+    if not clustering._dp_ready:
         raise MissingDPTableError(
             "DP table not computed. Call compute_dp_table(clustering) first."
         )
@@ -408,7 +406,7 @@ def enumerate_tied_optima(
     max_solutions = (
         max_solutions
         if max_solutions is not None
-        else getattr(clustering, "max_tied_optima", 100)
+        else clustering.max_tied_optima
     )
     if (
         isinstance(max_solutions, (bool, np.bool_))

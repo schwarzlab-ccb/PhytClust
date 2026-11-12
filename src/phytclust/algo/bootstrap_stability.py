@@ -9,17 +9,9 @@ from scipy import sparse
 
 from .core import PhytClust
 from .dp.table import _copy_tree
+from ..validation import positive_int
 from ..exceptions import ConfigurationError, DataError, InvalidKError
 from ..utils.traversal import terminals
-
-
-def _positive_integer(value, name, error=ConfigurationError):
-    if (
-        isinstance(value, (bool, np.bool_))
-        or not isinstance(value, Integral)
-        or value < 1
-    ):
-        raise error(f"{name} must be a positive integer.")
 
 
 def _common_taxon_names(trees):
@@ -53,8 +45,8 @@ def _cluster_labels_for_taxa(cluster_map, taxa):
 def _pairwise_coassociation(labels):
     """Return same-cluster frequencies for a replicate-by-taxon label matrix.
 
-    Negative labels are unassigned. Exclude those replicates for each pair.
-    Use zero for unobserved pairs and one on the diagonal.
+    Negative labels mean unassigned and are skipped for that pair. Unobserved
+    pairs are 0; the diagonal is 1.
     """
     labels = np.asarray(labels)
     if labels.ndim != 2 or not np.issubdtype(labels.dtype, np.integer):
@@ -107,8 +99,8 @@ def _bootstrap_labels(
     trees = list(trees)
     taxa = _common_taxon_names(trees)
     for k in k_values:
-        _positive_integer(k, "k", InvalidKError)
-    _positive_integer(min_cluster_size, "min_cluster_size")
+        positive_int(k, "k", error=InvalidKError)
+    positive_int(min_cluster_size, "min_cluster_size")
     if n_jobs is not None:
         if (
             isinstance(n_jobs, (bool, np.bool_))
@@ -154,7 +146,7 @@ def compute_coassoc_for_k(
 ):
     """Return common taxa, replicate labels, and pairwise co-association for k.
 
-    Preserve input trees. Labels have shape (replicates, taxa); -1 means
+    Labels have shape (replicates, taxa); -1 means
     unassigned. Co-association has shape (taxa, taxa).
     Use n_jobs=1 for serial execution, or -1/None for available worker processes.
     """
@@ -168,11 +160,9 @@ def compute_coassoc_for_k(
 def stability_for_k(coassoc: np.ndarray, counts: Optional[np.ndarray] = None) -> float:
     """Return mean pair consistency: 2 * abs(co-association - 0.5).
 
-    Both consistent grouping and consistent separation score one; a pair
-    together in half the replicates scores zero. Exclude unobserved pairs
-    when counts are supplied. Without counts, every off-diagonal pair is used.
-    Return zero when no pairs remain. This measure alone does not identify
-    a useful number of clusters.
+    A pair grouped together in every replicate, or apart in every replicate,
+    scores 1; together in half of them scores 0. Unobserved pairs are excluded
+    when counts are given. Returns 0 when no pairs remain.
     """
     coassociation = np.asarray(coassoc, dtype=float)
     if coassociation.ndim != 2 or coassociation.shape[0] != coassociation.shape[1]:
@@ -217,10 +207,8 @@ def choose_k_by_stability(
 ):
     """Compare pair consistency for supplied candidate cluster counts.
 
-    Supply candidates from clustering-score peaks or another selection rule.
-    Consistency alone can favor trivial partitions. Return best_k, scores,
-    coassoc matrices, and taxon order. Equal scores select the smaller k.
-    Reuse each replicate's DP across candidates.
+    Returns best_k, per-k scores, co-association matrices and the taxon order.
+    Ties go to the smaller k. Each replicate's DP is built once.
     """
     k_values = list(k_values)
     if not k_values:

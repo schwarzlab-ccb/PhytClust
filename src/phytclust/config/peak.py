@@ -2,9 +2,10 @@
 
 from dataclasses import dataclass
 import math
-from numbers import Integral, Real
+from numbers import Real
 
 from ..exceptions import ConfigurationError
+from ..validation import positive_int
 
 RANKING_MODES = ("raw", "adjusted")
 RESOLUTION_FALLBACK_MODES = ("none", "max_score")
@@ -19,12 +20,6 @@ def _finite_nonnegative(value, name):
         or value < 0
     ):
         raise ConfigurationError(f"{name} must be finite and zero or greater.")
-
-
-def _positive_integer(value, name):
-    """Check a window size or cluster count."""
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
-        raise ConfigurationError(f"{name} must be a positive integer.")
 
 
 @dataclass
@@ -47,6 +42,9 @@ class PeakConfig:
     # Smallest cluster count considered for automatic peak selection.
     min_k: int = 2
     resolution_fallback_mode: str = "none"
+    # Resolution mode needs at least this many scored cluster counts; with
+    # fewer, run(by_resolution=True) warns and runs a global top-3 search.
+    resolution_min_scores: int = 50
     exclude_k2: bool = False
 
     def __post_init__(self) -> None:
@@ -73,13 +71,14 @@ class PeakConfig:
         for name in ("use_log_peak_input", "use_relative_prominence", "exclude_k2"):
             if not isinstance(getattr(self, name), bool):
                 raise ConfigurationError(f"{name} must be True or False.")
-        _positive_integer(self.min_k, "min_k")
+        positive_int(self.min_k, "min_k")
+        positive_int(self.resolution_min_scores, "resolution_min_scores")
         if self.ranking_mode == "adjusted":
             _finite_nonnegative(self.prominence_weight, "prominence_weight")
             if self.prominence_weight > 1:
                 raise ConfigurationError("prominence_weight must be between 0 and 1.")
         if not self.exclude_k2 and self.min_k <= 2:
-            _positive_integer(self.boundary_window_size, "boundary_window_size")
+            positive_int(self.boundary_window_size, "boundary_window_size")
             _finite_nonnegative(
                 self.boundary_ratio_threshold, "boundary_ratio_threshold"
             )

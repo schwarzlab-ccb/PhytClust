@@ -17,9 +17,6 @@ def define_bins(
 
     Cover k_lo through k_hi. Default k_hi to the number of leaves.
     Rounding may produce fewer than num_bins ranges.
-
-    Resolution mode starts at 1 to preserve detail at small cluster counts,
-    although 1 is not selected as a score peak.
     """
     if k_hi is None:
         k_hi = clustering.num_terminals

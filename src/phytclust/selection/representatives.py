@@ -97,9 +97,7 @@ def _get_output_maximizing_pd(ranked_nodes: list[Tuple[str, float]]) -> Tuple[st
 
 
 def maximize_pd(tree: Tree, num_species: Optional[int] = None) -> list[Tuple[str, str]]:
-    """Rank leaves by summed distance to all leaves and return one text summary.
-
-    This compatibility name does not calculate phylogenetic diversity."""
+    """Rank leaves by summed pairwise distance and return one text summary."""
     ranked_nodes = rank_terminal_nodes(
         tree, num_species=num_species, mode="maximize", distance_ref="all"
     )
@@ -114,9 +112,8 @@ def _sum_distances_to_members(
 ) -> dict[Any, float]:
     """Sum distances between selected leaves in two iterative tree passes.
 
-    When members is None, include every leaf. Return scores only for members.
-    The first pass counts members and sums descendant distances; the second
-    propagates distance sums across parent-child edges."""
+    With members=None every leaf counts. Returns scores for members only.
+    """
     root = tree.root
     member_counts: dict[Any, int] = {}
     descendant_distance_sums: dict[Any, float] = {}
@@ -154,11 +151,6 @@ def _sum_distances_to_members(
     }
 
 
-def _sum_distances_to_all_leaves(tree: Tree) -> dict[Any, float]:
-    """Sum each terminal's distances to every terminal in the tree."""
-    return _sum_distances_to_members(tree)
-
-
 def compute_species_distance(
     tree: Tree,
     terminals: list[str],
@@ -182,7 +174,7 @@ def compute_species_distance(
     distances: dict[str, float] = {}
 
     if distance_ref == "all":
-        by_node = _sum_distances_to_all_leaves(tree)
+        by_node = _sum_distances_to_members(tree)
         wanted = set(terminals)
         for node, dist in by_node.items():
             name = getattr(node, "name", None)
@@ -213,9 +205,9 @@ def rank_terminal_nodes(
 ) -> list[Tuple[str, float]]:
     """Return leaf names and fixed distance scores in ranked order.
 
-    Maximize selects highest scores; minimize selects lowest scores.
-    Equal scores choose the alphabetically first name. Return at most
-    num_species leaves, or all leaves when it is None."""
+    Ties are broken by name. Returns at most num_species leaves, or all when
+    None.
+    """
     if num_species is not None and (
         isinstance(num_species, (bool, np.bool_))
         or not isinstance(num_species, Integral)
@@ -258,7 +250,7 @@ _STRATEGY_MAP = {
 
 def select_representative_species(
     tree: Tree,
-    clusters: dict[str, int],
+    clusters: dict[Any, int],
     *,
     strategy: str = "central",
     mode: Optional[str] = None,
@@ -266,12 +258,17 @@ def select_representative_species(
 ) -> list[str]:
     """Select one member of each cluster.
 
-    Central selects the leaf closest to the cluster common ancestor; divergent
-    selects the farthest. Medoid minimizes summed distances to cluster members.
-    Equal scores choose the alphabetically first name.
-
-    Override strategy defaults with mode (minimize/maximize) and distance_ref
-    (mrca/all). Names must identify unique leaves in the tree."""
+    central picks the leaf closest to the cluster's common ancestor, divergent
+    the farthest, and medoid the one with the smallest summed distance to the
+    other members. Ties are broken by name. mode and distance_ref override the
+    strategy defaults. clusters may be keyed by leaf name or leaf object.
+    """
+    clusters = {
+        (key if isinstance(key, str) else getattr(key, "name", None)): cluster_id
+        for key, cluster_id in clusters.items()
+    }
+    if None in clusters:
+        raise ConfigurationError("Every cluster member must be a named leaf.")
     if mode is None or distance_ref is None:
         if strategy not in _STRATEGY_MAP:
             raise ConfigurationError(
@@ -290,7 +287,7 @@ def select_representative_species(
     missing = set(clusters).difference(lookup)
     if missing:
         raise ConfigurationError(
-            f"Cluster contains species absent from the tree: {sorted(missing)}"
+            f"Cluster contains species absent from the tree: {sorted(map(str, missing))}"
         )
     parents, levels = _tree_paths(tree)
     by_cluster: dict[int, list[str]] = {}
@@ -299,18 +296,18 @@ def select_representative_species(
 
     representatives: list[str] = []
 
-    for cluster_id, species_list in by_cluster.items():
-        if len(species_list) == 1:
-            representatives.append(species_list[0])
+    for cluster_id, leaves in by_cluster.items():
+        if len(leaves) == 1:
+            representatives.append(leaves[0])
             continue
 
         mrca = _common_ancestor(
-            [lookup[name] for name in species_list], parents, levels
+            [lookup[name] for name in leaves], parents, levels
         )
 
         sub_tree = Tree(root=mrca, rooted=True)
 
-        members = set(species_list)
+        members = set(leaves)
         if distance_ref == "all":
             distances = {
                 node.name: distance
@@ -318,18 +315,9 @@ def select_representative_species(
                     sub_tree, members
                 ).items()
             }
-        elif distance_ref == "mrca":
-            local_distances = _descendant_distances(mrca)
-            distances = {name: local_distances[lookup[name]] for name in species_list}
         else:
-            raise ConfigurationError("distance_ref must be 'all' or 'mrca'")
-        if mode not in {"maximize", "minimize"}:
-            raise ConfigurationError("mode must be 'maximize' or 'minimize'")
-        missing = members.difference(distances)
-        if missing:
-            raise ConfigurationError(
-                f"Cluster contains species absent from the tree: {sorted(missing)}"
-            )
+            local_distances = _descendant_distances(mrca)
+            distances = {name: local_distances[lookup[name]] for name in leaves}
         best = min(
             members,
             key=lambda name: (

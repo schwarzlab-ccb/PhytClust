@@ -11,11 +11,10 @@ from ..exceptions import ConfigurationError
 class OutlierConfig:
     """Settings for small-cluster counts and penalties.
 
-    Clusters smaller than size_threshold count as outliers. Setting
-    prefer_fewer prioritizes their count before partition cost.
-    With no threshold, prefer_fewer counts singleton clusters as outliers.
-    Penalties require both penalty_enabled and an explicit size_threshold.
-    Saved outlier labels are controlled separately by the save options.
+    Clusters smaller than size_threshold are outliers; with no threshold,
+    singletons are. prefer_fewer ranks outlier count above cost. Penalties need
+    penalty_enabled and a size_threshold. Whether saved tables mark outliers is
+    a save option.
     """
 
     size_threshold: int | None = None

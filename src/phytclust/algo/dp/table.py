@@ -28,6 +28,7 @@ from .costs import (
     subtree_has_only_zero_length_branches,
     floating_point_precision,
     branch_support_fraction,
+    detect_support_scale,
     validate_clustering_parameters as _validate_clustering_parameters,
 )
 from ...validation import (
@@ -35,7 +36,7 @@ from ...validation import (
     prune_outgroup,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("phytclust")
 
 
 def validate_clustering_parameters(clustering) -> None:
@@ -58,7 +59,7 @@ def prepare_tree(clustering) -> None:
     clustering.tree, clustering.outgroup = validate_and_set_outgroup(
         clustering.tree,
         clustering.outgroup,
-        root_taxon=getattr(clustering, "root_taxon", None),
+        root_taxon=clustering.root_taxon,
     )
 
     polytomy_degrees = [
@@ -104,6 +105,14 @@ def prepare_tree(clustering) -> None:
 def compute_dp_table(clustering) -> None:
     """Build clustering costs and backtracking splits, processing children first."""
     tree = clustering._tree_wo_outgroup if clustering.outgroup else clustering.tree
+    clustering._support_scale = None
+    if clustering.use_branch_support:
+        clustering._support_scale = detect_support_scale(tree)
+        if clustering._support_scale == 1.0:
+            logger.warning(
+                "All branch supports are at most 1; reading them as fractions "
+                "(0-1) rather than percentages (0-100)."
+            )
     nodes = list(iter_clades(tree.root, "postorder"))
     clustering.postorder_nodes = nodes
     clustering.dp_children = [tuple(n.clades) for n in nodes]
@@ -111,16 +120,16 @@ def compute_dp_table(clustering) -> None:
     clustering.node_to_id = {node: i for i, node in enumerate(nodes)}
 
     clustering.dp_table = [None] * num_nodes
-    clustering.raw_dp_table = [None] * num_nodes
+    clustering.unpenalised_dp_table = [None] * num_nodes
     clustering.backptr = [None] * num_nodes
     clustering.polytomy_backptr = [None] * num_nodes
     clustering.cluster_cost = {}
     clustering.tied_optima = {}
 
-    dtype = np.float32 if getattr(clustering, "dp_float32", False) else np.float64
+    dtype = np.float32 if clustering.dp_float32 else np.float64
     relative_cost_tolerance = 8.0 * floating_point_precision(dtype)
 
-    dp_cap = getattr(clustering, "_dp_cap", None)
+    dp_cap = clustering._dp_cap
     if dp_cap is not None:
         global_max_cluster_count = dp_cap
     elif clustering.max_k is not None:
@@ -131,7 +140,7 @@ def compute_dp_table(clustering) -> None:
         raise InvalidKError("max_k (or implied global_max_cluster_count) must be ≥ 1.")
     clustering._dp_states_cap = global_max_cluster_count
 
-    min_cluster_size = getattr(clustering, "min_cluster_size", 1)
+    min_cluster_size = clustering.min_cluster_size
     if min_cluster_size < 1:
         raise ConfigurationError("min_cluster_size must be ≥ 1.")
 
@@ -139,8 +148,8 @@ def compute_dp_table(clustering) -> None:
     outlier_detection_enabled = outlier_size_threshold is not None
     prioritize_fewer_outliers = clustering.outlier.prefer_fewer
     preserve_dp_tables = bool(
-        getattr(clustering, "preserve_dp_tables", False)
-        or getattr(clustering, "save_tied_optima", False)
+        clustering.preserve_dp_tables
+        or clustering.save_tied_optima
         or logger.isEnabledFor(logging.DEBUG)
     )
 
@@ -195,7 +204,7 @@ def compute_dp_table(clustering) -> None:
                 leaf_outlier_counts[0] = 1 if leaf_count < outlier_size_threshold else 0
                 clustering._outlier_counts[node_id] = leaf_outlier_counts
 
-            clustering.raw_dp_table[node_id] = costs
+            clustering.unpenalised_dp_table[node_id] = costs
             clustering.dp_table[node_id] = penalized_costs
             continue
 
@@ -209,14 +218,14 @@ def compute_dp_table(clustering) -> None:
                 dtype,
             )
             clustering.dp_table[node_id] = penalized_costs if penalty_enabled else costs
-            clustering.raw_dp_table[node_id] = costs
+            clustering.unpenalised_dp_table[node_id] = costs
             clustering.polytomy_backptr[node_id] = poly_info
 
             if not preserve_dp_tables:
                 for child in node.clades:
                     cid = clustering.node_to_id[child]
                     clustering.dp_table[cid] = None
-                    clustering.raw_dp_table[cid] = None
+                    clustering.unpenalised_dp_table[cid] = None
                     if outlier_detection_enabled:
                         clustering._outlier_counts[cid] = None
             continue
@@ -227,8 +236,8 @@ def compute_dp_table(clustering) -> None:
 
         left_penalized_costs = clustering.dp_table[left_id]
         right_penalized_costs = clustering.dp_table[right_id]
-        left_costs = clustering.raw_dp_table[left_id]
-        right_costs = clustering.raw_dp_table[right_id]
+        left_costs = clustering.unpenalised_dp_table[left_id]
+        right_costs = clustering.unpenalised_dp_table[right_id]
 
         if left_penalized_costs is None or right_penalized_costs is None:
             raise MissingDPTableError(
@@ -254,7 +263,7 @@ def compute_dp_table(clustering) -> None:
             + right_leaf_count * right_branch_length
         )
 
-        if getattr(clustering, "use_branch_support", False):
+        if clustering.use_branch_support:
             raw_one_cluster /= branch_support_fraction(node, clustering)
 
         clustering.cluster_cost[node] = float(raw_one_cluster)
@@ -277,13 +286,13 @@ def compute_dp_table(clustering) -> None:
             outlier_counts = np.zeros(max_cluster_count + 1, dtype=np.int32)
             outlier_counts[0] = 1 if leaf_count < outlier_size_threshold else 0
 
-        zero_eps = getattr(clustering, "zero_length_eps", 1e-12)
-        no_split_zero = getattr(clustering, "no_split_zero_length", False)
+        zero_eps = clustering.zero_length_eps
+        no_split_zero = clustering.no_split_zero_length
 
         if no_split_zero and subtree_has_only_zero_length_branches(
             node, clustering, zero_length_tolerance=zero_eps
         ):
-            clustering.raw_dp_table[node_id] = costs
+            clustering.unpenalised_dp_table[node_id] = costs
             clustering.dp_table[node_id] = penalized_costs
             clustering.backptr[node_id] = split_offsets
 
@@ -296,8 +305,8 @@ def compute_dp_table(clustering) -> None:
             if not preserve_dp_tables:
                 clustering.dp_table[left_id] = None
                 clustering.dp_table[right_id] = None
-                clustering.raw_dp_table[left_id] = None
-                clustering.raw_dp_table[right_id] = None
+                clustering.unpenalised_dp_table[left_id] = None
+                clustering.unpenalised_dp_table[right_id] = None
             continue
 
         merge_child_tables(
@@ -315,7 +324,7 @@ def compute_dp_table(clustering) -> None:
             split_offsets,
         )
 
-        clustering.raw_dp_table[node_id] = costs
+        clustering.unpenalised_dp_table[node_id] = costs
         clustering.dp_table[node_id] = penalized_costs
         clustering.backptr[node_id] = split_offsets
 
@@ -328,8 +337,8 @@ def compute_dp_table(clustering) -> None:
         if not preserve_dp_tables:
             clustering.dp_table[left_id] = None
             clustering.dp_table[right_id] = None
-            clustering.raw_dp_table[left_id] = None
-            clustering.raw_dp_table[right_id] = None
+            clustering.unpenalised_dp_table[left_id] = None
+            clustering.unpenalised_dp_table[right_id] = None
 
     clustering.postorder_nodes = nodes
     clustering._dp_ready = True
@@ -343,7 +352,7 @@ def _assign_subtrees_to_cluster(
 ) -> int:
     """Assign the leaves of each subtree to one cluster; return the next cluster ID."""
     name_leaves = (
-        getattr(clustering, "name_leaves_per_node", None)
+        clustering.name_leaves_per_node
         if clustering is not None
         else None
     )
@@ -416,13 +425,13 @@ def _reconstruct_soft_polytomy_tasks(
         key = (mask, q)
         if key not in parent_map:
             raise MissingDPTableError("Soft-polytomy reconstruction choice is missing.")
-        prev_mask, prev_q, block_mask, child_state = parent_map[key]
-        chain.append((block_mask, child_state))
+        prev_mask, prev_q, group_mask, child_state = parent_map[key]
+        chain.append((group_mask, child_state))
         mask, q = prev_mask, prev_q
 
     tasks = []
-    for block_mask, child_state in reversed(chain):
-        bits = [i for i in range(len(children)) if block_mask & (1 << i)]
+    for group_mask, child_state in reversed(chain):
+        bits = [i for i in range(len(children)) if group_mask & (1 << i)]
         if child_state is None:
             tasks.append(("group", [children[i] for i in bits], None))
         else:
@@ -464,14 +473,14 @@ def _reconstruct_polytomy_tasks(
 def backtrack(clustering, k: int, *, verbose: bool = False) -> dict[Any, int]:
     """Reconstruct a k-cluster partition from stored splits.
 
-    Return a mapping from active leaves to cluster IDs. Reject invalid k,
-    impossible partitions, missing splits, and incomplete leaf assignments.
+    Returns {leaf: cluster id}. Raises for invalid k, impossible partitions and
+    missing splits.
     """
     if k is None:
         raise InvalidKError("value of k is missing.")
     if isinstance(k, (bool, np.bool_)) or not isinstance(k, Integral) or k <= 0:
         raise InvalidKError("k must be a positive integer.")
-    if not getattr(clustering, "_dp_ready", False):
+    if not clustering._dp_ready:
         raise MissingDPTableError(
             "DP table not computed. Call compute_dp_table(clustering) first."
         )
@@ -495,7 +504,7 @@ def backtrack(clustering, k: int, *, verbose: bool = False) -> dict[Any, int]:
             raise InvalidKError(
                 f"k={k} exceeds the number of leaves ({clustering.num_terminals})."
             )
-        max_k_val = getattr(clustering, "max_k", None)
+        max_k_val = clustering.max_k
         if max_k_val is not None and k > max_k_val:
             raise InvalidKError(
                 f"Cannot partition into {k} clusters — max_k is set to {max_k_val}. "
@@ -506,8 +515,8 @@ def backtrack(clustering, k: int, *, verbose: bool = False) -> dict[Any, int]:
             f"(tree has {clustering.num_terminals} terminals)."
         )
 
-    min_cluster_size = getattr(clustering, "min_cluster_size", 1)
-    no_split_zero = getattr(clustering, "no_split_zero_length", False)
+    min_cluster_size = clustering.min_cluster_size
+    no_split_zero = clustering.no_split_zero_length
     if not np.isfinite(root_dp[cluster_index]):
         reasons = []
         if min_cluster_size > 1:
@@ -584,18 +593,13 @@ def backtrack(clustering, k: int, *, verbose: bool = False) -> dict[Any, int]:
             "The partition must contain every active leaf exactly once."
         )
 
-    if getattr(clustering, "save_tied_optima", False):
+    if clustering.save_tied_optima:
         from .tied_partitions import enumerate_tied_optima
 
-        if not hasattr(clustering, "tied_optima") or clustering.tied_optima is None:
+        if clustering.tied_optima is None:
             clustering.tied_optima = {}
         clustering.tied_optima[k] = enumerate_tied_optima(
             clustering, k, chosen=clusters
         )
 
     return clusters
-
-
-def cluster_map(clustering, k: int) -> dict[Any, int]:
-    """Return the partition for k clusters using the clustering instance."""
-    return clustering.get_clusters(k)

@@ -1,11 +1,14 @@
 from typing import Optional
+import logging
 import math
-from numbers import Integral
 
 import numpy as np
 
+from ...validation import positive_int
 from ...exceptions import ConfigurationError, InvalidKError, InvalidTreeError
 from ...utils.traversal import iter_clades
+
+logger = logging.getLogger("phytclust")
 
 
 _EPS_CACHE: dict = {}
@@ -22,16 +25,11 @@ def floating_point_precision(dtype) -> float:
 
 def validate_clustering_parameters(clustering) -> None:
     """Check counts, cost settings, and support values used by clustering."""
-    def check_count(name, value, minimum=1, error=ConfigurationError):
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < minimum:
-            raise error(f"{name} must be a whole number of at least {minimum}.")
-
-    for name in ("k", "max_k"):
-        value = getattr(clustering, name, None)
+    for name, value in (("k", clustering.k), ("max_k", clustering.max_k)):
         if value is not None:
-            check_count(name, value, error=InvalidKError)
-    check_count("min_cluster_size", clustering.min_cluster_size)
-    check_count("max_tied_optima", getattr(clustering, "max_tied_optima", 100))
+            positive_int(value, name, error=InvalidKError)
+    positive_int(clustering.min_cluster_size, "min_cluster_size")
+    positive_int(clustering.max_tied_optima, "max_tied_optima")
     clustering.outlier.validate()
     if not _finite_number(clustering.max_k_limit):
         raise ConfigurationError("max_k_limit must be a finite number.")
@@ -42,18 +40,16 @@ def validate_clustering_parameters(clustering) -> None:
             raise ConfigurationError("min_support must be greater than zero and at most 1.")
         for node in iter_clades(clustering.tree.root):
             branch_support_fraction(node, clustering)
-    if clustering.k is not None and clustering.k < 1:
-        raise InvalidKError("k must be ≥ 1 if provided.")
     if not 0 < clustering.max_k_limit <= 1:
         raise ConfigurationError("max_k_limit must be between 0 and 1")
 
-    polytomy_mode = getattr(clustering, "polytomy_mode", "soft")
+    polytomy_mode = clustering.polytomy_mode
     if polytomy_mode not in {"hard", "soft"}:
         raise ConfigurationError("polytomy_mode must be 'hard' or 'soft'.")
 
     if polytomy_mode == "soft":
-        max_deg = getattr(clustering, "soft_polytomy_max_degree", 12)
-        check_count("soft_polytomy_max_degree", max_deg, minimum=2)
+        max_deg = clustering.soft_polytomy_max_degree
+        positive_int(max_deg, "soft_polytomy_max_degree", minimum=2)
 
 
 def _finite_number(value) -> bool:
@@ -68,7 +64,7 @@ def small_cluster_penalty_enabled(clustering) -> bool:
     """Return whether small-cluster penalties are enabled and have nonzero weight."""
     outlier_config = clustering.outlier
     return bool(
-        getattr(outlier_config, "penalty_enabled", False)
+        outlier_config.penalty_enabled
         and outlier_config.size_threshold is not None
         and outlier_config.ratio_weight > 0
     )
@@ -101,14 +97,36 @@ def small_cluster_penalty(cluster_size: int, clustering) -> float:
     return penalty
 
 
-def branch_support_fraction(node, clustering) -> float:
-    """Convert confidence percentages to fractions; missing confidence means full support."""
-    if not getattr(clustering, "use_branch_support", False):
+def detect_support_scale(tree) -> float:
+    """Return 1.0 when every branch support in ``tree`` is at most 1, else 100.0.
+
+    Bootstrap percentages (0-100) and posterior probabilities (0-1) are both
+    common; a tree whose supports never exceed 1 is read as 0-1.
+    """
+    supports = [
+        clade.confidence
+        for clade in iter_clades(tree.root)
+        if clade.confidence is not None and _finite_number(clade.confidence)
+    ]
+    if supports and max(supports) <= 1.0:
         return 1.0
-    confidence = node.confidence if node.confidence is not None else 100.0
-    if not _finite_number(confidence) or not 0 <= confidence <= 100:
-        raise InvalidTreeError(f"Confidence for node {node.name!r} must be between 0 and 100.")
-    return max(confidence / 100.0, clustering.min_support)
+    return 100.0
+
+
+def branch_support_fraction(node, clustering) -> float:
+    """Convert a clade's support to a fraction; missing support means full support.
+
+    The scale comes from detect_support_scale, run once per DP build.
+    """
+    if not clustering.use_branch_support:
+        return 1.0
+    scale = clustering._support_scale or 100.0
+    confidence = node.confidence if node.confidence is not None else scale
+    if not _finite_number(confidence) or not 0 <= confidence <= scale:
+        raise InvalidTreeError(
+            f"Confidence for node {node.name!r} must be between 0 and {scale:g}."
+        )
+    return max(confidence / scale, clustering.min_support)
 
 
 def is_better_partition(
@@ -125,13 +143,10 @@ def is_better_partition(
 ) -> bool:
     """Return whether the candidate partition should replace the current best.
 
-    When requested, compare outlier counts before costs. Otherwise compare
-    costs first and use outlier counts to break ties. For remaining ties,
-    prefer a more even distribution of clusters among child groups.
-
-    This comparator is used for polytomies, where small-cluster penalties
-    are disabled. Binary merges with penalties compare penalized costs first.
-    Treat costs as tied within the relative cost tolerance.
+    With prefer_fewer, outlier counts are compared before cost; otherwise cost
+    first, then outlier count, then the more even spread of clusters across
+    children. Costs within the relative tolerance are tied. Used at polytomies,
+    where small-cluster penalties do not apply.
     """
     if not np.isfinite(candidate_cost):
         return False

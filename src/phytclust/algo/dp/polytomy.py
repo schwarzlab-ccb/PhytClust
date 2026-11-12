@@ -27,7 +27,7 @@ def compute_polytomy_dp(
     dtype,
 ):
     """Choose hard or soft mode for a node with more than two children."""
-    mode = getattr(clustering, "polytomy_mode", "soft")
+    mode = clustering.polytomy_mode
     if mode == "hard":
         return compute_polytomy_dp_hard(
             node,
@@ -99,8 +99,8 @@ def compute_polytomy_dp_hard(
     if outlier_detection_enabled:
         outlier_counts[0] = 1 if leaf_count < outlier_size_threshold else 0
 
-    zero_length_tolerance = getattr(clustering, "zero_length_eps", 1e-12)
-    no_split_zero = getattr(clustering, "no_split_zero_length", False)
+    zero_length_tolerance = clustering.zero_length_eps
+    no_split_zero = clustering.no_split_zero_length
     if no_split_zero and subtree_has_only_zero_length_branches(
         node, clustering, zero_length_tolerance=zero_length_tolerance
     ):
@@ -111,7 +111,7 @@ def compute_polytomy_dp_hard(
     first_child = children[0]
     first_id = clustering.node_to_id[first_child]
 
-    prefix_costs = clustering.raw_dp_table[first_id].copy()
+    prefix_costs = clustering.unpenalised_dp_table[first_id].copy()
     prefix_leaf_count = clustering.num_leaves_per_node[first_child]
 
     prefix_outlier_counts = (
@@ -125,7 +125,7 @@ def compute_polytomy_dp_hard(
 
     for child in children[1:]:
         child_id = clustering.node_to_id[child]
-        child_costs = clustering.raw_dp_table[child_id]
+        child_costs = clustering.unpenalised_dp_table[child_id]
         child_leaf_count = clustering.num_leaves_per_node[child]
         child_outlier_counts = (
             clustering._outlier_counts[child_id] if outlier_detection_enabled else None
@@ -194,14 +194,13 @@ def compute_polytomy_dp_soft(
 ):
     """Compute costs for an unresolved multifurcation.
 
-    Allow groups of two or more child subtrees to form one cluster.
-    Individual children may use their own clustering states.
-
-    Store reconstruction choices for selected states. Computation grows
-    exponentially with the number of children."""
+    Allow groups of two or more child subtrees to form one cluster. Individual
+    children may use their own clustering states.
+    Cost grows exponentially with the number of children.
+    """
     children = list(node.clades)
     child_count = len(children)
-    max_child_count = getattr(clustering, "soft_polytomy_max_degree", 12)
+    max_child_count = clustering.soft_polytomy_max_degree
     if child_count > max_child_count:
         raise ConfigurationError(
             f"Node {node.name!r} has {child_count} children; soft mode allows at most {max_child_count}. "
@@ -240,8 +239,8 @@ def compute_polytomy_dp_soft(
     if outlier_detection_enabled:
         outlier_counts[0] = 1 if leaf_count < outlier_size_threshold else 0
 
-    zero_length_tolerance = getattr(clustering, "zero_length_eps", 1e-12)
-    no_split_zero = getattr(clustering, "no_split_zero_length", False)
+    zero_length_tolerance = clustering.zero_length_eps
+    no_split_zero = clustering.no_split_zero_length
     if no_split_zero and subtree_has_only_zero_length_branches(
         node, clustering, zero_length_tolerance=zero_length_tolerance
     ):
@@ -289,7 +288,7 @@ def compute_polytomy_dp_soft(
         first_remaining_child_index = first_remaining_child_bit.bit_length() - 1
         child = children[first_remaining_child_index]
         child_id = clustering.node_to_id[child]
-        child_costs = clustering.raw_dp_table[child_id]
+        child_costs = clustering.unpenalised_dp_table[child_id]
         child_outlier_counts = (
             clustering._outlier_counts[child_id] if outlier_detection_enabled else None
         )

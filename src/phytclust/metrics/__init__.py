@@ -20,6 +20,13 @@ from .indices import (
     calculate_proportions,
     gini_coefficient,
     cluster_alpha,
+    branch_length_standard_deviation,
+    root_to_tip_lengths,
+    root_to_tip_standard_deviation,
+    internal_branch_standard_deviation,
+    terminal_branch_standard_deviation,
+    internal_to_terminal_std_ratio,
+    sibling_leaf_distances,
 )
 
 __all__ = [
@@ -44,19 +51,6 @@ __all__ = [
     "calculate_proportions",
     "gini_coefficient",
     "cluster_alpha",
-]
-
-from .indices import (
-    branch_length_standard_deviation,
-    root_to_tip_lengths,
-    root_to_tip_standard_deviation,
-    internal_branch_standard_deviation,
-    terminal_branch_standard_deviation,
-    internal_to_terminal_std_ratio,
-    sibling_leaf_distances,
-)
-
-__all__ += [
     "branch_length_standard_deviation",
     "root_to_tip_lengths",
     "root_to_tip_standard_deviation",

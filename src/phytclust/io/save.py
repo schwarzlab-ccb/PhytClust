@@ -1,18 +1,17 @@
 import os
 import logging
 from collections import Counter
-from numbers import Integral
 from typing import Any, Optional
 
-import numpy as np
 import pandas as pd
 
+from ..validation import positive_int
 from ..exceptions import ConfigurationError, InvalidClusteringError, InvalidKError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("phytclust")
 
 
-def _safe_filename(filename: str) -> str:
+def _output_filename(filename: str) -> str:
     """Require a plain filename without path separators or reserved output names."""
     if not isinstance(filename, str) or not filename or "\x00" in filename:
         raise ValueError(
@@ -30,15 +29,6 @@ def _safe_filename(filename: str) -> str:
     return name
 
 
-def _positive_count(value, name, error):
-    if (
-        isinstance(value, (bool, np.bool_))
-        or not isinstance(value, Integral)
-        or value < 1
-    ):
-        raise error(f"{name} must be a positive integer.")
-
-
 def save_clusters(
     pc,
     results_dir: str,
@@ -50,45 +40,41 @@ def save_clusters(
 ) -> Optional[str]:
     """Write selected cluster assignments and alpha statistics as TSV files.
 
-    An explicit n takes priority over the stored fixed count, all-count export,
-    and selected peaks, in that order. The public save method calls this n
-    argument k. Skip impossible partitions only when exporting all counts.
-
-    With outlier=True, mark clusters below the configured threshold as -1.
-    Without a threshold, mark singleton clusters as -1.
-
-    Write peak ranks only for exported peaks; the ranking file is empty for
-    fixed-count exports. Return the assignment path, or None for no results.
+    Exports the given count, else the last fixed k, else every count
+    (output_all, skipping infeasible counts), else the selected peaks. With
+    outlier=True, clusters below the threshold, or singletons without one, are
+    written as -1. peaks_by_rank.txt is empty for a fixed k. Returns the
+    assignment path, or None without results.
     """
-    clustering = pc
-    filename = _safe_filename(filename)
-    _positive_count(top_n, "top_n", ConfigurationError)
+    filename = _output_filename(filename)
+    positive_int(top_n, "top_n", error=ConfigurationError)
     if n is not None:
-        _positive_count(n, "k", InvalidKError)
-    saving_all = n is None and clustering.k is None and output_all
-    exporting_peaks = n is None and clustering.k is None and not saving_all
+        positive_int(n, "k", error=InvalidKError)
+    exact_k = pc.exact_k
+    saving_all = n is None and exact_k is None and output_all
+    exporting_peaks = n is None and exact_k is None and not saving_all
     if n is not None:
         cluster_counts = [n]
-    elif clustering.k is not None:
-        _positive_count(clustering.k, "k", InvalidKError)
-        cluster_counts = [clustering.k]
+    elif exact_k is not None:
+        positive_int(exact_k, "k", error=InvalidKError)
+        cluster_counts = [exact_k]
     elif saving_all:
-        maximum = clustering._effective_max_k()
-        cluster_counts = list(range(1, min(maximum, clustering.num_terminals) + 1))
+        maximum = pc._effective_max_k()
+        cluster_counts = list(range(1, min(maximum, pc.num_terminals) + 1))
     else:
-        cluster_counts = list(dict.fromkeys((clustering.peaks_by_rank or [])[:top_n]))
+        cluster_counts = list(dict.fromkeys((pc.peaks_by_rank or [])[:top_n]))
 
-    outlier_size_threshold = clustering.outlier.size_threshold
+    outlier_size_threshold = pc.outlier.size_threshold
     records: list[dict[str, Any]] = []
     alpha_rows: list[dict[str, Any]] = []
     exported_counts = []
     if cluster_counts:
         for cluster_count in cluster_counts:
-            _positive_count(cluster_count, "k", InvalidKError)
-        clustering._ensure_dp(required_cap=max(cluster_counts))
+            positive_int(cluster_count, "k", error=InvalidKError)
+        pc._ensure_dp(required_cap=max(cluster_counts))
     for cluster_count in cluster_counts:
         try:
-            cluster_map = clustering._clusters(cluster_count)
+            cluster_map = pc._clusters(cluster_count)
         except InvalidClusteringError:
             if not saving_all:
                 raise
@@ -100,7 +86,7 @@ def save_clusters(
         if not cluster_map:
             continue
         cluster_sizes = Counter(cluster_map.values())
-        alpha_rows.append(clustering.alpha_info(cluster_count, cluster_map))
+        alpha_rows.append(pc.alpha_info(cluster_count, cluster_map))
         exported_counts.append(cluster_count)
         for node, cluster_id in cluster_map.items():
             output_cluster_id = cluster_id
@@ -138,11 +124,13 @@ def save_clusters(
     assignments.to_csv(output_path, index=False, sep="\t")
     logger.info("Wrote cluster assignments to %s", output_path)
 
-    selected_peaks = (
-        [count for count in cluster_counts if count in exported_counts]
-        if exporting_peaks
-        else []
-    )
+    if exporting_peaks:
+        ranked_counts = cluster_counts
+    elif saving_all:
+        ranked_counts = list(dict.fromkeys((pc.peaks_by_rank or [])[:top_n]))
+    else:
+        ranked_counts = []
+    selected_peaks = [count for count in ranked_counts if count in exported_counts]
     peaks_path = os.path.join(results_dir, "peaks_by_rank.txt")
     with open(peaks_path, "w", encoding="utf-8") as stream:
         for rank, cluster_count in enumerate(selected_peaks, 1):

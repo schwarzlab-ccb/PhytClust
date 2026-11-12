@@ -12,70 +12,53 @@ from ..exceptions import (
 from ..viz.scores import plot_scores as _plot_scores
 from .bins import define_bins as _define_bins
 from ..config import RANKING_MODES, PeakConfig
-from ..utils.traversal import nonterminals, terminals
+from ..utils.traversal import iter_clades
 
 logger = logging.getLogger("phytclust")
 
 
-def _first_zero_length_pair_split(
-    clustering, max_k: int, eps: float = 1e-12
-) -> Optional[int]:
-    """Find the first observed split of a two-leaf subtree on a zero-length edge.
+def zero_distance_groups(clustering) -> list[list[Any]]:
+    """Return groups of leaves that are at zero patristic distance from each other.
 
-    Check adjacent feasible cluster counts up to max_k or the diagnostic
-    search limit, whichever is smaller. This does not detect every zero-length split."""
-    if getattr(clustering, "no_split_zero_length", False):
-        return None
-
+    Two leaves are at zero distance when every branch on the path between them
+    has length at most ``zero_length_eps`` (default ``1e-12``). Each returned group has at least two leaves and is maximal: no
+    leaf outside it is at zero distance from a member.
+    """
+    eps = clustering.zero_length_eps
     active_tree = (
-        clustering._tree_wo_outgroup if clustering.outgroup else clustering.tree
+        clustering._tree_wo_outgroup
+        if clustering.outgroup and clustering._tree_wo_outgroup is not None
+        else clustering.tree
     )
-    zero_length_pairs: list[tuple] = []
-    for node in nonterminals(active_tree.root):
-        for child in node.clades:
-            branch_length = child.branch_length or 0.0
-            if branch_length <= eps:
-                cached = getattr(clustering, "name_leaves_per_node", None)
-                terms = cached.get(child) if cached is not None else None
-                if terms is None:
-                    terms = list(terminals(child))
-                if len(terms) == 2:
-                    zero_length_pairs.append((terms[0], terms[1]))
+    reachable: dict[Any, list[Any]] = {}
+    groups: list[list[Any]] = []
+    for node in iter_clades(active_tree.root, order="postorder"):
+        if not node.clades:
+            members = [node]
+        else:
+            members = []
+            for child in node.clades:
+                child_members = reachable.pop(child)
+                if (child.branch_length or 0.0) <= eps:
+                    members.extend(child_members)
+                elif len(child_members) > 1:
+                    groups.append(child_members)
+        reachable[node] = members
+    root_members = reachable.pop(active_tree.root, [])
+    if len(root_members) > 1:
+        groups.append(root_members)
+    return groups
 
-    if not zero_length_pairs:
-        return None
 
-    search_cap = int(getattr(clustering, "zero_length_split_max_k", 100))
-    effective_max_k = min(max_k, search_cap)
-    clustering._ensure_dp(required_cap=effective_max_k)
-    try:
-        prev = clustering._clusters(1)
-    except (ValueError, RuntimeError, InvalidClusteringError, MissingDPTableError):
-        prev = None
-
-    for k in range(2, effective_max_k + 1):
-        try:
-            cur = clustering._clusters(k)
-        except (ValueError, RuntimeError, InvalidClusteringError, MissingDPTableError):
-            prev = None
-            continue
-
-        if prev is not None:
-            for t1, t2 in zero_length_pairs:
-                pc1 = prev.get(t1)
-                pc2 = prev.get(t2)
-                if pc1 is None or pc2 is None or pc1 != pc2:
-                    continue
-                cc1 = cur.get(t1)
-                cc2 = cur.get(t2)
-                if cc1 is None or cc2 is None:
-                    continue
-                if cc1 != cc2:
-                    return k
-
-        prev = cur
-
-    return None
+def zero_distance_splits(
+    groups: list[list[Any]], cluster_map: dict[Any, int]
+) -> list[list[Any]]:
+    """Return the zero-distance groups whose leaves fall in different clusters."""
+    return [
+        group
+        for group in groups
+        if len({cluster_map.get(leaf) for leaf in group}) > 1
+    ]
 
 
 def _score_cluster_count(
@@ -95,11 +78,11 @@ def _score_cluster_count(
     root = active_tree.root
     root_id = clustering.node_to_id[root]
 
-    use_penalized_beta = getattr(clustering, "use_penalized_beta_for_scoring", False)
+    use_penalized_beta = clustering.use_penalized_beta_for_scoring
     dp_row = (
         clustering.dp_table[root_id]
         if use_penalized_beta
-        else clustering.raw_dp_table[root_id]
+        else clustering.unpenalised_dp_table[root_id]
     )
 
     if dp_row is None:
@@ -110,17 +93,17 @@ def _score_cluster_count(
     num_terminals = clustering.num_terminals
 
     if clusters is not None:
-        num_clusters = len(set(clusters.values()))
-        if num_clusters < 1 or num_clusters > clustering.max_k:
+        k = len(set(clusters.values()))
+        if k < 1 or k > clustering.max_k:
             return (float("inf"), float("inf"), float("inf"))
-        if num_clusters - 1 >= len(dp_row):
+        if k - 1 >= len(dp_row):
             return (float("inf"), float("inf"), float("inf"))
-        beta = dp_row[num_clusters - 1]
+        beta = dp_row[k - 1]
 
     elif k is not None:
         if k < 1 or k > clustering.max_k or k - 1 >= len(dp_row):
             return (float("inf"), float("inf"), float("inf"))
-        num_clusters = k
+        k = k
         beta = dp_row[k - 1]
 
     else:
@@ -134,17 +117,8 @@ def _score_cluster_count(
     if beta == 0:
         return (beta, float("inf"), 0.0)
 
-    relative_cost_floor = float(
-        getattr(clustering, "score_beta_floor_frac", 0.0) or 0.0
-    )
-    absolute_cost_floor = float(getattr(clustering, "score_beta_floor_abs", 0.0) or 0.0)
-    beta_floor = max(
-        absolute_cost_floor, relative_cost_floor * float(clustering.beta_1)
-    )
-    beta_denom = max(float(beta), beta_floor)
-
-    beta_ratios = (clustering.beta_1 - beta) / beta_denom
-    norm_ratios = (num_terminals - num_clusters) / float(num_clusters)
+    beta_ratios = (clustering.beta_1 - beta) / float(beta)
+    norm_ratios = (num_terminals - k) / float(k)
 
     if not np.isfinite(beta_ratios) or not np.isfinite(norm_ratios):
         score = 0.0
@@ -164,11 +138,11 @@ def _score_all_cluster_counts(clustering) -> tuple[np.ndarray, np.ndarray, np.nd
     )
     root_id = clustering.node_to_id[active_tree.root]
 
-    use_penalized_cost = getattr(clustering, "use_penalized_beta_for_scoring", False)
+    use_penalized_cost = clustering.use_penalized_beta_for_scoring
     dp_row = (
         clustering.dp_table[root_id]
         if use_penalized_cost
-        else clustering.raw_dp_table[root_id]
+        else clustering.unpenalised_dp_table[root_id]
     )
     if dp_row is None:
         raise MissingDPTableError("Root DP row missing.")
@@ -177,12 +151,6 @@ def _score_all_cluster_counts(clustering) -> tuple[np.ndarray, np.ndarray, np.nd
     clustering.beta_1 = float(dp_row[0])
     num_terminals = clustering.num_terminals
     max_k = int(clustering.max_k)
-
-    relative_cost_floor = float(
-        getattr(clustering, "score_beta_floor_frac", 0.0) or 0.0
-    )
-    absolute_cost_floor = float(getattr(clustering, "score_beta_floor_abs", 0.0) or 0.0)
-    beta_floor = max(absolute_cost_floor, relative_cost_floor * clustering.beta_1)
 
     available_cost_count = min(max_k, len(dp_row))
     betas = np.full(max_k, np.inf, dtype=float)
@@ -193,8 +161,7 @@ def _score_all_cluster_counts(clustering) -> tuple[np.ndarray, np.ndarray, np.nd
 
     edge = ~np.isfinite(betas) | (betas == 0)
     with np.errstate(invalid="ignore", divide="ignore"):
-        beta_denom = np.maximum(betas, beta_floor)
-        beta_ratios_full = (clustering.beta_1 - betas) / beta_denom
+        beta_ratios_full = (clustering.beta_1 - betas) / betas
         scores_full = beta_ratios_full * norm_ratios
 
     beta_ratios = np.where(edge, np.inf, beta_ratios_full)
@@ -220,14 +187,12 @@ def _cached_cluster_count_scores(
     base_sig = (
         clustering._dp_cache_sig,
         clustering._dp_cap,
-        bool(getattr(clustering, "use_penalized_beta_for_scoring", False)),
-        float(getattr(clustering, "score_beta_floor_frac", 0.0) or 0.0),
-        float(getattr(clustering, "score_beta_floor_abs", 0.0) or 0.0),
+        clustering.use_penalized_beta_for_scoring,
     )
 
-    cached = clustering._score_raw_arrays
-    cached_sig = clustering._score_raw_base_sig
-    cached_cap = clustering._score_raw_cap
+    cached = clustering._score_arrays_cache
+    cached_sig = clustering._score_arrays_sig
+    cached_cap = clustering._score_arrays_cap
 
     if (
         cached is not None
@@ -244,32 +209,21 @@ def _cached_cluster_count_scores(
 
     betas, ratios, scores = _score_all_cluster_counts(clustering)
 
-    clustering._score_raw_arrays = (betas.copy(), ratios.copy(), scores.copy())
-    clustering._score_raw_cap = requested
-    clustering._score_raw_base_sig = base_sig
+    clustering._score_arrays_cache = (betas.copy(), ratios.copy(), scores.copy())
+    clustering._score_arrays_cap = requested
+    clustering._score_arrays_sig = base_sig
     return betas, ratios, scores
 
 
 def calculate_scores(clustering) -> None:
     """Calculate elbow-weighted scores while preserving cluster-count positions."""
-    if clustering.k is not None:
-        from .dp import cluster_map
-
-        cmap = cluster_map(clustering, clustering.k)
-        beta, cost_reduction_ratio, score = _score_cluster_count(
-            clustering, clusters=cmap
+    if not clustering.max_k or clustering.max_k <= 0:
+        raise ConfigurationError(
+            "max_k must be set and positive to compute DP-based scores."
         )
-        beta_values = np.array([beta], dtype=float)
-        cost_reduction_ratios = np.array([cost_reduction_ratio], dtype=float)
-        scores = np.array([score], dtype=float)
-    else:
-        if not clustering.max_k or clustering.max_k <= 0:
-            raise ConfigurationError(
-                "max_k must be set and positive to compute DP-based scores."
-            )
-        beta_values, cost_reduction_ratios, scores = _cached_cluster_count_scores(
-            clustering
-        )
+    beta_values, cost_reduction_ratios, scores = _cached_cluster_count_scores(
+        clustering
+    )
 
     scores[scores < 0] = 0
     beta_values[beta_values < 0] = 0
@@ -302,21 +256,9 @@ def calculate_scores(clustering) -> None:
     )
     # Keep array positions aligned with k; impossible partitions get zero score.
     scores[invalid_mask | ~finite_costs] = 0.0
-    valid_mask = np.ones(n, dtype=bool)
-
-    scores_valid = scores[valid_mask]
-    beta_valid = beta_values[valid_mask]
-    den_valid = cost_reduction_ratios[valid_mask]
-    elbow_valid = elbow_scores[valid_mask]
-
-    if len(scores_valid) == 0:
-        clustering.scores = np.array([], dtype=float)
-        clustering.beta_values = np.array([], dtype=float)
-        clustering.norm_ratios = np.array([], dtype=float)
-        return
 
     combined_scores = np.nan_to_num(
-        elbow_valid * scores_valid, nan=0.0, posinf=0.0, neginf=0.0
+        elbow_scores * scores, nan=0.0, posinf=0.0, neginf=0.0
     )
 
     eps = 1e-12
@@ -326,13 +268,9 @@ def calculate_scores(clustering) -> None:
     else:
         last_useful = len(combined_scores)
 
-    combined_scores = combined_scores[:last_useful]
-    beta_valid = beta_valid[:last_useful]
-    den_valid = den_valid[:last_useful]
-
-    clustering.scores = combined_scores
-    clustering.beta_values = beta_valid
-    clustering.norm_ratios = den_valid
+    clustering.scores = combined_scores[:last_useful]
+    clustering.beta_values = beta_values[:last_useful]
+    clustering.cost_reduction_ratios = cost_reduction_ratios[:last_useful]
 
 
 def _rank_peaks(
@@ -343,6 +281,9 @@ def _rank_peaks(
     """Rank peaks by prominence and score; returns list of dicts sorted best-first."""
     if ranking_mode not in RANKING_MODES:
         raise ConfigurationError(f"ranking_mode must be one of {RANKING_MODES}.")
+
+    if not peak_data:
+        return []
 
     all_prom = [x[1] for x in peak_data]
     all_sc = [x[2] for x in peak_data]
@@ -415,7 +356,18 @@ def _rank_peak_partitions(clustering, ranked_data, settings):
     return sorted(ranked_data, key=lambda item: item["ranking_metric"], reverse=True)
 
 
-def _plot_raw(
+def _close_score_figures(clustering) -> None:
+    """Close score figures left on the object by a previous run."""
+    import matplotlib.pyplot as plt
+
+    for figure in (clustering.score_plot, clustering.secondary_score_plot):
+        if figure is not None:
+            plt.close(figure)
+    clustering.score_plot = None
+    clustering.secondary_score_plot = None
+
+
+def _draw_score_plots(
     peaks_to_plot: list,
     *,
     clustering,
@@ -425,21 +377,21 @@ def _plot_raw(
     resolution_on: bool,
     num_bins: int,
 ) -> None:
-    """Build and assign score plots onto clustering.plot_of_scores / clustering.plot_of_raw_scores."""
+    """Build and assign score plots onto clustering.score_plot / clustering.secondary_score_plot.
+
+    Figures from an earlier run on the same object are closed first.
+    """
     if not plot:
         return
 
-    scores_cfg = getattr(getattr(clustering, "plot_config", None), "scores", None)
-    prefer_unsmoothed_primary = bool(
-        getattr(scores_cfg, "prefer_unsmoothed_primary", True)
-    )
-    show_secondary_score_plot = bool(
-        getattr(scores_cfg, "show_secondary_score_plot", False)
-    )
+    _close_score_figures(clustering)
+    scores_cfg = clustering.plot_config.scores
+    score_plot_from_k3 = scores_cfg.score_plot_from_k3
+    show_secondary_score_plot = scores_cfg.show_secondary_score_plot
 
     if resolution_on:
         primary_arr = scores[1:k_end].copy()
-        clustering.plot_of_scores = _plot_scores(
+        clustering.score_plot = _plot_scores(
             clustering,
             scores_subset=primary_arr,
             peaks=peaks_to_plot,
@@ -450,7 +402,7 @@ def _plot_raw(
         )
         if show_secondary_score_plot:
             secondary_arr = scores[2:k_end].copy()
-            clustering.plot_of_raw_scores = _plot_scores(
+            clustering.secondary_score_plot = _plot_scores(
                 clustering,
                 scores_subset=secondary_arr,
                 peaks=peaks_to_plot,
@@ -460,12 +412,12 @@ def _plot_raw(
                 num_bins=num_bins,
             )
         else:
-            clustering.plot_of_raw_scores = None
+            clustering.secondary_score_plot = None
         return
 
-    if prefer_unsmoothed_primary:
+    if score_plot_from_k3:
         primary_arr = scores[2:k_end].copy()
-        clustering.plot_of_scores = _plot_scores(
+        clustering.score_plot = _plot_scores(
             clustering,
             scores_subset=primary_arr,
             peaks=peaks_to_plot,
@@ -476,7 +428,7 @@ def _plot_raw(
         )
         if show_secondary_score_plot:
             secondary_arr = scores[1:k_end].copy()
-            clustering.plot_of_raw_scores = _plot_scores(
+            clustering.secondary_score_plot = _plot_scores(
                 clustering,
                 scores_subset=secondary_arr,
                 peaks=peaks_to_plot,
@@ -486,10 +438,10 @@ def _plot_raw(
                 num_bins=num_bins,
             )
         else:
-            clustering.plot_of_raw_scores = None
+            clustering.secondary_score_plot = None
     else:
         primary_arr = scores[1:k_end].copy()
-        clustering.plot_of_scores = _plot_scores(
+        clustering.score_plot = _plot_scores(
             clustering,
             scores_subset=primary_arr,
             peaks=peaks_to_plot,
@@ -500,7 +452,7 @@ def _plot_raw(
         )
         if show_secondary_score_plot:
             secondary_arr = scores[2:k_end].copy()
-            clustering.plot_of_raw_scores = _plot_scores(
+            clustering.secondary_score_plot = _plot_scores(
                 clustering,
                 scores_subset=secondary_arr,
                 peaks=peaks_to_plot,
@@ -510,7 +462,7 @@ def _plot_raw(
                 num_bins=num_bins,
             )
         else:
-            clustering.plot_of_raw_scores = None
+            clustering.secondary_score_plot = None
 
 
 def find_score_peaks(
@@ -534,19 +486,19 @@ def find_score_peaks(
 
     min_k = peak_settings.min_k
     min_prominence = peak_settings.min_prominence
-    use_log_peak_input = bool(getattr(peak_settings, "use_log_peak_input", False))
-    log_peak_offset = getattr(peak_settings, "log_peak_offset", 1e-12)
+    use_log_peak_input = peak_settings.use_log_peak_input
+    log_peak_offset = peak_settings.log_peak_offset
     use_relative_prominence = bool(
-        getattr(peak_settings, "use_relative_prominence", False)
+        peak_settings.use_relative_prominence
     )
-    min_relative_prominence = getattr(peak_settings, "min_relative_prominence", None)
-    prominence_k_power = getattr(peak_settings, "prominence_k_power", 0.0)
+    min_relative_prominence = peak_settings.min_relative_prominence
+    prominence_k_power = peak_settings.prominence_k_power
     ranking_mode = peak_settings.ranking_mode
     prominence_weight = peak_settings.prominence_weight
     boundary_window_size = peak_settings.boundary_window_size
     boundary_ratio_threshold = peak_settings.boundary_ratio_threshold
     resolution_fallback_mode = peak_settings.resolution_fallback_mode
-    exclude_k2 = bool(getattr(peak_settings, "exclude_k2", False))
+    exclude_k2 = peak_settings.exclude_k2
     if exclude_k2:
         min_k = max(min_k, 3)
 
@@ -559,7 +511,8 @@ def find_score_peaks(
         clustering.peaks_by_resolution = None
 
         if plot:
-            clustering.plot_of_scores = _plot_scores(
+            _close_score_figures(clustering)
+            clustering.score_plot = _plot_scores(
                 clustering,
                 scores_subset=np.array([], dtype=float),
                 peaks=[],
@@ -568,21 +521,11 @@ def find_score_peaks(
                 num_bins=num_bins,
             )
 
-        logger.info("No score peaks found.")
+        logger.warning("No score peaks found; no partition was selected.")
         return []
 
     scores = np.asarray(scores, dtype=float)
     scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
-
-    zero_split_k = _first_zero_length_pair_split(clustering, len(scores))
-    clustering.zero_length_split_k = zero_split_k
-    if zero_split_k is not None:
-        logger.warning(
-            "At k=%d, leaves in a two-leaf subtree on a zero-length edge "
-            "are assigned to different clusters. Check peaks at k >= %d.",
-            zero_split_k,
-            zero_split_k,
-        )
 
     eps = 1e-12
     nonzero_idx = np.flatnonzero(np.abs(scores) > eps)
@@ -600,7 +543,7 @@ def find_score_peaks(
     allow_k2 = not exclude_k2 and min_k <= 2 <= k_end
 
     def _emit_plot(peaks_to_plot):
-        _plot_raw(
+        _draw_score_plots(
             peaks_to_plot,
             clustering=clustering,
             plot=plot,
@@ -610,28 +553,18 @@ def find_score_peaks(
             num_bins=num_bins,
         )
 
-    if allow_k2 and len(scores) > 1 and nonzero_idx.size == 1 and nonzero_idx[0] == 1:
-        clustering.peaks_by_rank = [2]
-        if not resolution_on:
-            clustering.resolution_info = None
-            clustering.peaks_by_resolution = None
-        else:
-            clustering.resolution_info = {
-                "special_case": [(2, float(scores[1]), float(scores[1]), 1.0)]
-            }
-            clustering.peaks_by_resolution = {"special_case": [2]}
-        _emit_plot([2])
-        return clustering.peaks_by_rank
-
     peak_data = []
 
-    if len(scores) > 2 and allow_k2:
+    if allow_k2:
         score_k2 = scores[1]
         w = min(boundary_window_size, len(scores) - 2)
         right_window = scores[2 : 2 + w]
 
-        if len(right_window) > 0 and score_k2 > right_window[0]:
-            window_baseline = float(np.median(right_window))
+        only_k2_nonzero = nonzero_idx.size == 1 and nonzero_idx[0] == 1
+        if only_k2_nonzero or (len(right_window) > 0 and score_k2 > right_window[0]):
+            window_baseline = (
+                float(np.median(right_window)) if len(right_window) else 0.0
+            )
             window_ratio = score_k2 / (window_baseline + eps)
 
             if window_ratio > boundary_ratio_threshold:
@@ -646,9 +579,8 @@ def find_score_peaks(
                 ):
                     peak_data.append((2, boundary_prom, score_k2))
 
-    # Eligibility must not change the observed context or prominence of peaks.
-    # Keep k=2 as the left neighbour of k=3, even when k=2 is ineligible.
-    # Its own selection remains governed by the boundary test above.
+    # k=2 stays the left neighbour of k=3 even when it is ineligible. The
+    # boundary test above decides whether k=2 itself is selected.
     context_start = 1
     context_scores = scores[context_start:k_end]
     peak_input = context_scores
@@ -709,21 +641,13 @@ def find_score_peaks(
         for cluster_count, (prominence, score) in dedup.items()
     ]
 
-    if len(peak_data) == 0:
-        if allow_k2 and len(scores) > 2 and scores[1] > scores[2]:
-            clustering.peaks_by_rank = [2]
-            if not resolution_on:
-                clustering.resolution_info = None
-                clustering.peaks_by_resolution = None
-            else:
-                clustering.resolution_info = {
-                    "fallback_k2": [(2, float(scores[1]), float(scores[1]), 1.0)]
-                }
-                clustering.peaks_by_resolution = {"fallback_k2": [2]}
-            _emit_plot([2])
-            return clustering.peaks_by_rank
-
-        logger.info("No score peaks found.")
+    use_resolution_fallback = (
+        resolution_on
+        and resolution_fallback_mode == "max_score"
+        and k_end >= max(min_k, 2)
+    )
+    if not peak_data and not use_resolution_fallback:
+        logger.warning("No score peaks found; no partition was selected.")
         clustering.peaks_by_rank = []
         clustering.resolution_info = None
         clustering.peaks_by_resolution = None

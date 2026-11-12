@@ -69,9 +69,7 @@ def _fingerprint_pass(
 ) -> dict[int, int]:
     """Bottom-up subtree hashes keyed by ``id(clade)``.
 
-    Children are combined by summing their hashes, which is order-free and
-    needs no sort. Reversing a stack preorder visits children before parents
-    without the postorder generator's per-node bookkeeping.
+    Child hashes are summed, so child order does not matter.
     """
     order = []
     stack = [root]
@@ -103,13 +101,10 @@ def clade_fingerprints(
 ) -> dict[int, int]:
     """Return ``id(clade) -> subtree hash``, ignoring child order.
 
-    Hashes include topology, branch lengths, confidence values, and names.
-    With ``internal_names=False``, only leaf names are included. Missing
-    branch lengths count as 0.0.
-
-    Different subtrees may have the same hash because collisions are possible.
-    Values are intended for comparisons within one process, not persistent
-    identifiers across runs.
+    Hashes include topology, branch lengths, confidence values, and names. With
+    internal_names=False, only leaf names are included. Missing branch lengths
+    count as 0.0.
+    Hashes can collide; use within one process only.
     """
     return _fingerprint_pass(root, internal_names, keep_all=True)
 
@@ -122,11 +117,9 @@ def tree_fingerprint(root: Any) -> int:
 def match_child_order(target: Any, source: Any) -> bool:
     """Reorder ``target``'s children in place to follow ``source``'s order.
 
-    Match subtrees using fingerprints that ignore internal node names.
-    Return False without modifying ``target`` if matching fails. Return
-    True after applying the matched child order.
-
-    Matching relies on hashes, so hash collisions can cause incorrect matches.
+    Subtrees are matched by fingerprint, ignoring internal names. Returns
+    False, leaving target unchanged, if they do not match. Hash collisions can
+    mismatch.
     """
     target_fp = clade_fingerprints(target, internal_names=False)
     source_fp = clade_fingerprints(source, internal_names=False)
@@ -156,11 +149,8 @@ def match_child_order(target: Any, source: Any) -> bool:
 class LeafSpans(Mapping):
     """Map nodes to descendant leaves using views into one shared array.
 
-    Each node stores a ``(start, end)`` span in a depth-first leaf ordering.
-    Values are NumPy views containing the original leaf objects.
-
-    Spans describe the tree when this mapping was built and do not update
-    after tree edits. Rebuild after changes to topology or child order.
+    Each node maps to a (start, end) span of a depth-first leaf array. Rebuild
+    after changes to topology or child order.
     """
 
     def __init__(self, leaf_order: np.ndarray, spans: dict[Any, tuple[int, int]]):

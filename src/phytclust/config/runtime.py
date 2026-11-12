@@ -28,7 +28,7 @@ class ScorePlotConfig:
     log_scale_y: bool = True
     x_axis_mode: str = "log"
     log_base: float | None = None
-    prefer_unsmoothed_primary: bool = True
+    score_plot_from_k3: bool = False
     show_secondary_score_plot: bool = False
     colorblind_palette: list[str] | None = None
 
@@ -69,6 +69,9 @@ class RuntimeConfig:
     save: SaveConfig = field(default_factory=SaveConfig)
 
 
+_RENAMED_SETTINGS = {"prefer_unsmoothed_primary": "score_plot_from_k3"}
+
+
 def _apply_runtime_overrides(
     config: Any, overrides: Mapping[str, Any], setting_path: str = ""
 ) -> None:
@@ -76,6 +79,13 @@ def _apply_runtime_overrides(
     field_names = {config_field.name for config_field in fields(config)}
     for name, value in overrides.items():
         full_name = f"{setting_path}.{name}" if setting_path else str(name)
+        if name in _RENAMED_SETTINGS:
+            warnings.warn(
+                f"{full_name!r} was renamed to {_RENAMED_SETTINGS[name]!r}.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            name = _RENAMED_SETTINGS[name]
         if name not in field_names:
             warnings.warn(
                 f"Unknown runtime setting {full_name!r}; ignored.",
