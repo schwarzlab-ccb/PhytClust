@@ -1,4 +1,4 @@
-"""Run the JavaScript GUI JavaScript checks."""
+"""Run the GUI JavaScript tests."""
 
 from pathlib import Path
 import shutil
@@ -18,9 +18,14 @@ import pytest
         "state.test.cjs",
         "session.test.cjs",
         "colors.test.cjs",
+        "file.test.cjs",
+        "layout.test.cjs",
+        "status.test.cjs",
+        "outliers.test.cjs",
+        "compare.test.cjs",
     ],
 )
-def test_gui_api_requests_and_results(filename):
+def test_gui_javascript(filename):
     test_file = Path(__file__).parent / "js" / filename
     result = subprocess.run(
         ["node", str(test_file)], capture_output=True, text=True, timeout=15

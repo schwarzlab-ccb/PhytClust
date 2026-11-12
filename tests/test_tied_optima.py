@@ -1,37 +1,26 @@
 import itertools
-from io import StringIO
 
 import pytest
-from Bio import Phylo
 
 from phytclust import PhytClust
 from phytclust.algo.dp import enumerate_tied_optima
 from phytclust.exceptions import ConfigurationError
+from conftest import leaf_groups, tree_from_newick
+from phytclust.algo import core as core_mod
 
 # Degree-4 polytomy of four identical cherries: every way of pairing the
 # children costs the same, so soft mode has genuine ties at k=2 and k=3.
 BALANCED_POLYTOMY = "((A:1,B:1):1,(C:1,D:1):1,(E:1,F:1):1,(G:1,H:1):1);"
 
 
-def _tree(newick):
-    return Phylo.read(StringIO(newick), "newick")
-
-
-def _signature(cluster_map):
-    groups = {}
-    for terminal, cluster_id in cluster_map.items():
-        groups.setdefault(cluster_id, set()).add(terminal.name)
-    return frozenset(frozenset(names) for names in groups.values())
-
-
 def _pc(newick=BALANCED_POLYTOMY, **kwargs):
     kwargs.setdefault("max_k", 8)
     kwargs.setdefault("save_tied_optima", True)
-    return PhytClust(tree=_tree(newick), **kwargs)
+    return PhytClust(tree=tree_from_newick(newick), **kwargs)
 
 
 def test_disabled_by_default():
-    pc = PhytClust(tree=_tree(BALANCED_POLYTOMY), max_k=8, polytomy_mode="soft")
+    pc = PhytClust(tree=tree_from_newick(BALANCED_POLYTOMY), max_k=8, polytomy_mode="soft")
     pc.get_clusters(2)
     assert not getattr(pc, "tied_optima", {})
 
@@ -50,7 +39,7 @@ def test_soft_ties_are_recorded():
     assert result["n_solutions"] == len(result["solutions"])
     assert result["n_solutions"] > 1
 
-    signatures = {_signature(s) for s in result["solutions"]}
+    signatures = {leaf_groups(s) for s in result["solutions"]}
     assert len(signatures) == result["n_solutions"], "solutions must be distinct"
     for signature in signatures:
         assert len(signature) == 2
@@ -68,7 +57,7 @@ def test_first_solution_matches_backtrack():
     pc = _pc(polytomy_mode="soft")
     clusters = pc.get_clusters(3)
     recorded = pc.tied_optima[3]["solutions"]
-    assert _signature(clusters) == _signature(recorded[0])
+    assert leaf_groups(clusters) == leaf_groups(recorded[0])
 
 
 @pytest.mark.parametrize("cap", [1, 2])
@@ -76,7 +65,7 @@ def test_capped_results_keep_selected_partition_first(cap):
     pc = _pc(polytomy_mode="soft", max_tied_optima=cap)
     chosen = pc.get_clusters(3)
     result = pc.tied_optima[3]
-    assert _signature(result["solutions"][0]) == _signature(chosen)
+    assert leaf_groups(result["solutions"][0]) == leaf_groups(chosen)
     assert result["n_solutions"] <= cap
     assert result["truncated"]
 
@@ -103,14 +92,6 @@ def test_binary_tree_unique_optimum():
         assert pc.tied_optima[k]["n_solutions"] >= 1
 
 
-def test_cap_truncates_and_flags():
-    pc = _pc(polytomy_mode="soft", max_tied_optima=2)
-    pc.get_clusters(3)
-    result = pc.tied_optima[3]
-    assert result["truncated"]
-    assert result["n_solutions"] <= 2
-
-
 def test_prefer_fewer_is_rejected():
     pc = _pc(polytomy_mode="soft")
     pc.outlier.size_threshold = 2
@@ -133,7 +114,7 @@ def test_matches_brute_force_on_polytomy():
     def leafset(node):
         return frozenset(t.name for t in node.get_terminals())
 
-    tree = _tree(newick)
+    tree = tree_from_newick(newick)
     candidates = [(leafset(n), clade_cost(n)) for n in tree.find_clades()]
     for node in tree.find_clades():
         children = list(node.clades)
@@ -172,4 +153,23 @@ def test_matches_brute_force_on_polytomy():
         result = pc.tied_optima[k]
 
         assert result["score"] == pytest.approx(best)
-        assert {_signature(s) for s in result["solutions"]} == set(best_parts)
+        assert {leaf_groups(s) for s in result["solutions"]} == set(best_parts)
+
+
+def test_tied_optima_backtracks_once(monkeypatch):
+    calls = {"n": 0}
+    real = core_mod.backtrack
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(core_mod, "backtrack", counted)
+    pc = PhytClust(
+        tree=tree_from_newick("((A:1,B:1):1,(C:1,D:1):1,(E:1,F:1):1,(G:1,H:1):1);"),
+        max_k=8,
+        save_tied_optima=True,
+    )
+    pc.get_clusters(2)
+    assert calls["n"] == 1
+    assert pc.tied_optima[2]["n_solutions"] > 1

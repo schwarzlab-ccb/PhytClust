@@ -1,13 +1,14 @@
-"""Score ranges, axis choices, and resolution labels."""
-
 from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from phytclust.config.runtime import ScorePlotConfig
+from conftest import POLYTOMY_TREE
+from phytclust import PhytClust
+from phytclust.config import ScorePlotConfig
 from phytclust.exceptions import ConfigurationError, InvalidClusteringError
+from phytclust.viz import scores as score_plots
 from phytclust.viz.scores import plot_scores
 
 
@@ -153,3 +154,43 @@ def test_large_peak_labels_near_right_edge_stay_visible(clustering):
         for index, first in enumerate(boxes)
         for second in boxes[index + 1 :]
     )
+
+
+def test_peak_labels_work_without_raster_renderer():
+    """PDF, SVG and PS canvases have no get_renderer()."""
+    from matplotlib.backends.backend_pdf import FigureCanvasPdf
+
+    figure, axis = plt.subplots()
+    axis.plot([1, 2, 3], [1, 3, 2])
+    FigureCanvasPdf(figure)
+    assert not hasattr(figure.canvas, "get_renderer")
+    score_plots._label_peaks(axis, [(2, 3.0)], fontsize=10, marker_size=5)
+    plt.close(figure)
+
+
+def test_repeated_runs_do_not_accumulate_score_figures():
+    plt.close("all")
+    pc = PhytClust(POLYTOMY_TREE)
+    for _ in range(3):
+        pc.run(top_n=2)
+    assert len(plt.get_fignums()) == 1
+    plt.close("all")
+
+
+def test_default_score_plot_starts_at_k2():
+    pc = PhytClust(POLYTOMY_TREE)
+    pc.run(top_n=2)
+    line = pc.score_plot.axes[0].lines[0]
+    assert line.get_xdata()[0] == 2
+    plt.close("all")
+
+
+def test_invalid_axis_mode_is_rejected(clustering):
+    with pytest.raises(ConfigurationError, match="x_axis_mode must be"):
+        plot_scores(clustering, x_axis_mode="invalid")
+
+
+def test_linear_mode_uses_a_linear_x_axis(clustering):
+    axis = plot_scores(clustering, x_axis_mode="linear").axes[0]
+    assert axis.get_xscale() == "linear"
+    assert axis.get_xlim()[0] == pytest.approx(0.5)

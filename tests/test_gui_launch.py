@@ -1,6 +1,5 @@
 """GUI startup validation, browser timing, and environment cleanup."""
 
-import os
 import threading
 from types import SimpleNamespace
 
@@ -77,31 +76,9 @@ def test_reload_does_not_open_browser(fake_uvicorn, monkeypatch):
     ]
 
 
-@pytest.mark.parametrize("previous", [None, "0", "1"])
-@pytest.mark.parametrize("failure", [False, True])
-def test_public_mode_restored_after_shutdown(
-    fake_uvicorn, monkeypatch, previous, failure
-):
-    if previous is None:
-        monkeypatch.delenv("PHYTCLUST_PUBLIC_MODE", raising=False)
-    else:
-        monkeypatch.setenv("PHYTCLUST_PUBLIC_MODE", previous)
-
-    def run():
-        assert os.environ["PHYTCLUST_PUBLIC_MODE"] == "1"
-        if failure:
-            raise OSError("port occupied")
-        fake_uvicorn.started = True
-
-    fake_uvicorn.run = run
-    assert launch.main(["--public", "--no-browser"]) == (1 if failure else 0)
-    assert os.environ.get("PHYTCLUST_PUBLIC_MODE") == previous
-
-
-def test_existing_public_mode_kept_without_flag(fake_uvicorn, monkeypatch):
-    monkeypatch.setenv("PHYTCLUST_PUBLIC_MODE", "1")
-    assert launch.main(["--no-browser"]) == 0
-    assert os.environ["PHYTCLUST_PUBLIC_MODE"] == "1"
+def test_public_flag_is_gone(capsys):
+    with pytest.raises(SystemExit):
+        launch.build_gui_parser().parse_args(["--public"])
 
 
 def test_dependency_error_uses_stderr(monkeypatch, capsys):

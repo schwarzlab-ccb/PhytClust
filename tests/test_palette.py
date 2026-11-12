@@ -62,7 +62,7 @@ const vm = require('vm');
 const path = require('path');
 const d3 = require(path.join(path.dirname(process.argv[1]), '../vendor/d3.v7.min.js'));
 const source = fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '');
-const colors = vm.runInNewContext(source + '; generateClusterColors(64)', { d3 });
+const colors = vm.runInNewContext(source + '; generateClusterColours(64)', { d3 });
 process.stdout.write(JSON.stringify(colors));"""
     output = subprocess.run(
         ["node", "-e", script, str(path)],

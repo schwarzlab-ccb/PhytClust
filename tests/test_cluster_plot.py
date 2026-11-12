@@ -1,14 +1,16 @@
 from unittest.mock import patch
-
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 from Bio.Phylo.BaseTree import Clade, Tree
 
-from phytclust import PhytClust
-from phytclust.exceptions import ValidationError
+from conftest import POLYTOMY_TREE, SAMPLE_TREE
+from phytclust import ClusterPlotConfig, PhytClust, PlotConfig, RuntimeConfig
+from phytclust.exceptions import ConfigurationError, ValidationError
 from phytclust.viz import plots
+from phytclust.viz.cluster import plot_clusters, plot_multiple_k
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +74,7 @@ def test_color_callback_error_reaches_caller(clustering):
         raise RuntimeError("colour failed")
 
     with pytest.raises(RuntimeError, match="colour failed"):
-        plots.plot_tree(clustering.tree, branch_color_func=fail)
+        plots.plot_tree(clustering.tree, branch_colour_func=fail)
 
 
 def test_formatted_names_keep_cluster_colors(clustering):
@@ -137,10 +139,14 @@ def test_scattered_cluster_ancestor_and_invalid_members(clustering):
         plots._cluster_common_ancestors(clustering.tree, {0: [Clade(name="foreign")]})
 
 
-@pytest.mark.parametrize("palette", [[], ["red"]])
-def test_short_custom_palette_is_rejected(clustering, palette):
+def test_empty_custom_palette_is_rejected(clustering):
     with pytest.raises(ValidationError, match="palette"):
-        plots.plot_cluster(clustering.get_clusters(2), clustering.tree, palette=palette)
+        plots.plot_cluster(clustering.get_clusters(2), clustering.tree, palette=[])
+
+
+def test_short_custom_palette_cycles_with_warning(clustering):
+    with pytest.warns(UserWarning, match="colours repeat"):
+        plots.plot_cluster(clustering.get_clusters(2), clustering.tree, palette=["red"])
 
 
 def test_custom_lower_level_title(clustering):
@@ -217,12 +223,6 @@ def test_bar_placement_respects_formatted_label_width(clustering):
         axis.transData.transform((patch.get_x(), 0))[0] for patch in axis.patches
     )
     assert bar_left > label_right
-
-
-def test_peak_labels_and_coordinates_use_cluster_counts():
-    figure = plots.plot_peaks([0.2, 0.8, 0.3], [1], k_start=2, show_plot=False)
-    np.testing.assert_allclose(figure.axes[0].lines[0].get_xdata(), [2, 3, 4])
-    assert figure.axes[0].texts[0].get_text() == "3"
 
 
 def test_unnamed_internal_nodes_can_have_markers(clustering):
@@ -384,3 +384,135 @@ def test_comparison_separators_are_only_between_solutions():
     np.testing.assert_allclose(
         [line.get_xdata() for line in lines], [[20, 20], [30, 30]]
     )
+
+
+@pytest.fixture
+def simple_clustering():
+    return PhytClust("((a:1,b:1):1,(c:1,d:1):1);", max_k=4)
+
+
+@pytest.mark.parametrize("count", [True, 1.5, 0, -1])
+def test_invalid_counts(simple_clustering, count):
+    with pytest.raises(ConfigurationError, match="positive integer"):
+        plot_clusters(simple_clustering, k=count)
+
+
+def test_multiple_counts_prepare_once_and_keep_all_files(simple_clustering, tmp_path):
+    with patch.object(simple_clustering, "_ensure_dp", wraps=simple_clustering._ensure_dp) as prepare:
+        plot_multiple_k(
+            simple_clustering, [2, 3, 2], results_dir=tmp_path, filename="clusters.png"
+        )
+    assert prepare.call_count == 1
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "clusters_k2.png",
+        "clusters_k3.png",
+    }
+
+
+def test_ranked_counts_keep_all_files(simple_clustering, tmp_path):
+    simple_clustering.peaks_by_rank = [2, 3]
+    plot_clusters(simple_clustering, top_n=2, results_dir=tmp_path, filename="clusters.svg")
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "clusters_k2.svg",
+        "clusters_k3.svg",
+    }
+
+
+def test_label_spacing_and_style_do_not_change_global_settings(simple_clustering):
+    original_font_size = plt.rcParams["font.size"]
+    with patch("matplotlib.pyplot.show"):
+        plot_clusters(simple_clustering, k=2, show_terminal_labels=True)
+    figure = plt.gcf()
+    try:
+        assert figure.get_size_inches()[1] >= 2.5
+        assert figure.axes[0].get_title(loc="left") == "PhytClust’s clusters at k = 2"
+        assert plt.rcParams["font.size"] == original_font_size
+    finally:
+        plt.close(figure)
+
+
+def test_clustering_failure_is_not_hidden(simple_clustering):
+    with patch.object(simple_clustering, "_ensure_dp", side_effect=RuntimeError("failed")):
+        with pytest.raises(RuntimeError, match="failed"):
+            plot_multiple_k(simple_clustering, [2])
+
+
+def test_failed_save_closes_figure(simple_clustering, tmp_path):
+    existing = set(plt.get_fignums())
+    with patch("matplotlib.figure.Figure.savefig", side_effect=OSError("failed")):
+        with pytest.raises(OSError, match="failed"):
+            plot_clusters(simple_clustering, k=2, results_dir=tmp_path)
+    assert set(plt.get_fignums()) == existing
+
+
+def test_outgroup_plot_uses_partition_tree(tmp_path):
+    simple_clustering = PhytClust("((a:1,b:1):1,(c:1,d:1):1,out:3);", outgroup="out", max_k=4)
+    with patch(
+        "phytclust.viz.cluster.plot_cluster",
+        wraps=__import__("phytclust.viz.plots", fromlist=["plot_cluster"]).plot_cluster,
+    ) as draw:
+        plot_clusters(
+            simple_clustering, k=2, results_dir=tmp_path, colour_branches_by_cluster=True
+        )
+    assert draw.call_args.kwargs["tree"] is simple_clustering._tree_wo_outgroup
+    assert set(draw.call_args.kwargs["cluster"]).issubset(
+        set(simple_clustering._tree_wo_outgroup.get_terminals())
+    )
+
+
+def test_supplied_axis_is_styled_without_resizing(simple_clustering):
+    figure, axes = plt.subplots(1, 2, figsize=(10, 4))
+    axes[0].set_title("Other plot")
+    with patch("matplotlib.pyplot.show"):
+        plot_clusters(simple_clustering, k=2, ax=axes[1])
+    try:
+        assert axes[0].get_title() == "Other plot"
+        assert axes[1].get_title(loc="left") == "PhytClust’s clusters at k = 2"
+        assert tuple(figure.get_size_inches()) == (10, 4)
+    finally:
+        plt.close(figure)
+
+
+@pytest.mark.parametrize("title", ["My clusters", ""])
+@pytest.mark.parametrize("plot", [plot_clusters, plot_multiple_k])
+def test_custom_title(simple_clustering, title, plot):
+    options = {"k": 2} if plot is plot_clusters else {"k_values": [2]}
+    with patch("matplotlib.pyplot.show"):
+        plot(simple_clustering, title=title, **options)
+    figure = plt.gcf()
+    try:
+        assert figure.axes[0].get_title(loc="left") == title
+        assert figure.axes[0].get_title(loc="center") == ""
+    finally:
+        plt.close(figure)
+
+
+def test_configured_height_scale_is_honoured(tmp_path):
+    from PIL import Image
+
+    pc_default = PhytClust(POLYTOMY_TREE)
+    pc_tall = PhytClust(
+        POLYTOMY_TREE,
+        runtime_config=RuntimeConfig(
+            plot=PlotConfig(cluster=ClusterPlotConfig(height_scale=0.8))
+        ),
+    )
+    sizes = []
+    for pc in (pc_default, pc_tall):
+        pc.get_clusters(4)
+        plot_clusters(pc, k=4, results_dir=str(tmp_path), save=True)
+        with Image.open(tmp_path / "tree_k4.png") as image:
+            sizes.append(image.size[1])
+    assert sizes[1] != sizes[0]
+
+
+def test_continuous_colormap_gives_distinct_colours():
+    pc = PhytClust(SAMPLE_TREE)
+    figure = plots.plot_cluster(pc.get_clusters(3), pc.tree, cmap="viridis")
+    colours = {
+        mcolors.to_hex(colour)
+        for collection in figure.axes[0].collections
+        for colour in collection.get_facecolors()
+    }
+    assert len(colours) >= 3
+    plt.close(figure)

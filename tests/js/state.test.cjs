@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const source = fs.readFileSync(path.join(__dirname, '../../src/phytclust/gui/static/js/state.js'), 'utf8').replace(/export /g, '');
 function loadState() {
   const context = vm.createContext({ d3: { zoomIdentity: {} }, structuredClone });
-  vm.runInContext(source + '\nglobalThis.state = state; globalThis.selection = SELECTED_CLUSTER_IDS;', context);
+  vm.runInContext(source + '\nglobalThis.state = state; globalThis.selection = selectedClusterIds;', context);
   return context;
 }
 

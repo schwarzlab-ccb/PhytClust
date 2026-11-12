@@ -288,7 +288,7 @@ def test_dp_reused_after_subtrees_swapped(counted, newick, seed):
     dp_after_first = counted["dp"].calls
 
     _rotate(pc.tree, seed)
-    pc.clusters = {}
+    pc.cluster_maps = {}
     rotated = _partitions(pc, ks)
 
     assert counted["dp"].calls == dp_after_first, (

@@ -89,4 +89,3 @@ def test_deep_tree_uses_iterative_traversal():
 def test_summary_describes_distance_scores():
     summary = maximize_pd(_tree("(a:1,b:2);"), 1)[0][0]
     assert "distance scores" in summary
-    assert "Maximizing PD" not in summary

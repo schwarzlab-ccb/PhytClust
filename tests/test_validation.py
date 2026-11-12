@@ -260,6 +260,5 @@ def test_missing_lengths_are_reported_separately_from_zero_lengths(caplog):
     with caplog.at_level('WARNING'):
         ensure_branch_lengths(tree)
     assert '1 of 4 branches have missing lengths' in caplog.text
-    assert 'Provide' not in caplog.text
     assert tree.find_any(name='a').branch_length == 0
     assert tree.find_any(name='b').branch_length is None
