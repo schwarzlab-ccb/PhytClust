@@ -1,10 +1,7 @@
-/* ============================================================
-   PhytClust – ui/tabs.js
-   Tab switching logic.
-   ============================================================ */
+// Switch between the tree, score, and comparison views.
 
 import { state } from "../state.js";
-import { drawOptimalK } from "../views/optimal_k.js";
+import { drawScores } from "../views/scores.js";
 import { drawComparison } from "../views/compare.js";
 
 export function switchTab(tabName) {
@@ -18,19 +15,19 @@ export function switchTab(tabName) {
     .forEach((panel) => panel.classList.toggle("active", panel.id === tabName));
 
   var treeToolbar = document.getElementById("tree-toolbar");
-  var optkToolbar = document.getElementById("optk-toolbar");
+  var scoresToolbar = document.getElementById("scores-toolbar");
   var compareToolbar = document.getElementById("compare-toolbar");
   var compareConfigList = document.getElementById("compare-config-list");
   if (treeToolbar)
     treeToolbar.style.display = tabName === "viewer" ? "" : "none";
-  if (optkToolbar)
-    optkToolbar.style.display = tabName === "viewer-optimal-k" ? "" : "none";
+  if (scoresToolbar)
+    scoresToolbar.style.display = tabName === "viewer-scores" ? "" : "none";
   if (compareToolbar)
     compareToolbar.style.display = tabName === "compare" ? "" : "none";
   if (compareConfigList)
     compareConfigList.classList.toggle("visible", tabName === "compare");
 
-  if (tabName === "viewer-optimal-k" && state.latestOptimalKData)
-    drawOptimalK(state.latestOptimalKData);
+  if (tabName === "viewer-scores" && state.lastScoresData)
+    drawScores(state.lastScoresData);
   if (tabName === "compare") drawComparison();
 }

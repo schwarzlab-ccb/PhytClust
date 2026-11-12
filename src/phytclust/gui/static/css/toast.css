@@ -35,6 +35,10 @@
   background: rgba(196, 84, 84, 0.92);
   color: #fff;
 }
+.toast.warning {
+  background: rgba(138, 104, 20, 0.95);
+  color: #fff;
+}
 .toast.fade-out {
   animation: toastOut 0.25s ease forwards;
 }
@@ -73,4 +77,8 @@
 }
 .status-dot.error {
   background: var(--pc-danger);
+}
+
+.status-dot.warning {
+  background: var(--pc-warning);
 }

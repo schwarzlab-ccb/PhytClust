@@ -4,9 +4,11 @@ import csv
 import logging
 import math
 import os
+import re
 import threading
 import uuid
 from collections import OrderedDict
+from contextlib import contextmanager
 from io import StringIO
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
@@ -18,16 +20,27 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from phytclust import __version__
 from phytclust.algo.core import PhytClust
 from phytclust.config import OutlierConfig, PeakConfig
-from phytclust.io.save import _safe_filename
+from phytclust.io.save import _output_filename
 from phytclust.exceptions import (
     PhytClustError,
 )
-from phytclust.utils.traversal import match_child_order, terminals, tree_fingerprint
+from phytclust.utils.traversal import match_child_order, tree_fingerprint
 
 logger = logging.getLogger("phytclust.gui")
+
+# Same grammar as DECIMAL_NUMBER in static/js/utils.js, so the server accepts
+# exactly the branch lengths the browser can draw.
+_DECIMAL_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _is_finite_decimal(text: str) -> bool:
+    """Return True for a plain decimal number that is finite as a float."""
+    return bool(_DECIMAL_NUMBER.fullmatch(text)) and math.isfinite(float(text))
 
 
 def _normalize_newick(newick: str) -> str:
@@ -74,6 +87,11 @@ def _normalize_newick(newick: str) -> str:
             position += 1
             while position < len(newick) and newick[position] not in "(),;[":
                 position += 1
+            length = newick[start + 1 : position].strip()
+            if length and not _is_finite_decimal(length):
+                raise ValueError(
+                    f"Branch length {length!r} must be a finite number."
+                )
             result.append(newick[start:position])
         else:
             start = position
@@ -90,15 +108,43 @@ def _normalize_newick(newick: str) -> str:
     return "".join(result)
 
 
-PUBLIC_MODE: bool = os.getenv("PHYTCLUST_PUBLIC_MODE", "0") == "1"
-PUBLIC_MAX_TIPS: int = int(os.getenv("PHYTCLUST_MAX_TIPS", "10000"))
-
 _CACHE: OrderedDict[str, tuple[PhytClust, dict[str, Any]]] = OrderedDict()
 _CACHE_MAX = 20
 
 _RUN_LOCK = threading.Lock()
 
-app = FastAPI(title="PhytClust Web API")
+app = FastAPI(title="PhytClust Web API", version=__version__)
+
+LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
+
+
+def _allowed_hosts() -> list[str]:
+    """Accept loopback Host headers unless PHYTCLUST_ALLOWED_HOSTS widens the list.
+
+    Other Host values are rejected to block DNS rebinding against a loopback
+    server. The launcher sets the variable when binding a non-loopback address.
+    """
+    configured = os.environ.get("PHYTCLUST_ALLOWED_HOSTS", "").strip()
+    if configured:
+        return [host.strip() for host in configured.split(",") if host.strip()]
+    return list(LOOPBACK_HOSTS)
+
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
+
+SAVE_EXTENSIONS = {".tsv", ".txt", ".csv"}
+
+
+def _export_filename(filename: str) -> str:
+    """Require a plain filename with a tabular text extension."""
+    name = _output_filename(filename)
+    if os.path.splitext(name)[1].casefold() not in SAVE_EXTENSIONS:
+        raise ValueError(
+            f"Output filename {filename!r} must end in one of: "
+            + ", ".join(sorted(SAVE_EXTENSIONS))
+            + "."
+        )
+    return name
 
 STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -109,6 +155,7 @@ LAST_PC: Optional[PhytClust] = None
 LAST_RESULT: Optional[dict[str, Any]] = None
 LAST_NEWICK: Optional[str] = None
 LAST_CONSTRUCTION_KEY: Optional[tuple] = None
+LAST_CONSTRUCTION_NOTES: list[str] = []
 
 
 def _cache_put(run_id: str, pc: PhytClust, result: dict[str, Any]) -> None:
@@ -131,14 +178,16 @@ def _cache_get(run_id: Optional[str]) -> tuple[PhytClust, dict[str, Any]]:
         return LAST_PC, LAST_RESULT
     raise HTTPException(
         status_code=400,
-        detail="No PhytClust result available. Please run PhytClust first.",
+        detail="No PhytClust result available. Run PhytClust before exporting results.",
     )
 
 
 @app.get("/", response_class=HTMLResponse)
 def serve_frontend(request: Request):
     """Serve the GUI page."""
-    return templates.TemplateResponse(request, "index.html")
+    return templates.TemplateResponse(
+        request, "index.html", {"phytclust_version": __version__}
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -197,12 +246,6 @@ class PhytclustRequest(BaseModel):
         return value.lower() if isinstance(value, str) else value
 
 
-def _require_last_result(
-    run_id: Optional[str] = None,
-) -> tuple[PhytClust, dict[str, Any]]:
-    return _cache_get(run_id)
-
-
 def _leaf_key_to_name(leaf: Any) -> str:
     name = getattr(leaf, "name", None)
     if name is not None:
@@ -210,7 +253,7 @@ def _leaf_key_to_name(leaf: Any) -> str:
     return str(leaf)
 
 
-def _safe_float(value) -> float | None:
+def _json_float(value) -> float | None:
     """Return a finite float, or None for missing or nonfinite values."""
     if value is None:
         return None
@@ -233,6 +276,106 @@ def _serialize_clusters(raw_clusters: Any) -> list[dict[str, int]]:
         }
         for cluster_map in cluster_maps
     ]
+
+
+class _WarningCollector(logging.Handler):
+    """Keep the distinct warning messages the library logs on this thread."""
+
+    def __init__(self) -> None:
+        """Collect WARNING and higher records from the creating thread only."""
+        super().__init__(level=logging.WARNING)
+        self.thread = threading.get_ident()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Store the formatted message unless it is a GUI record or a repeat."""
+        if record.thread != self.thread or record.name.startswith("phytclust.gui"):
+            return
+        try:
+            message = record.getMessage()
+        except Exception:
+            return
+        if message not in self.messages:
+            self.messages.append(message)
+
+
+@contextmanager
+def _library_warnings():
+    """Yield a list that fills with warnings logged by PhytClust in the block.
+
+    PhytClust reports input repairs (renamed nodes, negative or missing
+    lengths) through its logger; they are returned as run notes.
+    """
+    collector = _WarningCollector()
+    library_logger = logging.getLogger("phytclust")
+    library_logger.addHandler(collector)
+    try:
+        yield collector.messages
+    finally:
+        library_logger.removeHandler(collector)
+
+
+_NEWICK_QUOTED_CHARACTERS = set("()[]':;,\"")
+
+
+def _newick_label(name: str) -> str:
+    """Quote a node name when the browser's Newick reader would split it."""
+    if name and not any(
+        character in _NEWICK_QUOTED_CHARACTERS or character.isspace()
+        for character in name
+    ):
+        return name
+    return "'" + name.replace("'", "''") + "'"
+
+
+def _newick_number(value: Any) -> Optional[str]:
+    """Format a finite number for Newick, or return None."""
+    number = _json_float(value)
+    if number is None:
+        return None
+    if number.is_integer() and abs(number) < 1e15:
+        return str(int(number))
+    return repr(number)
+
+
+def _clustered_newick(tree: Any, input_names: set[str]) -> str:
+    """Write the tree PhytClust clustered, so drawn leaves match cluster keys.
+
+    PhytClust roots the tree, collapses single-child nodes, zeroes negative
+    lengths and renames duplicate or unnamed nodes before clustering, so the
+    drawn tree must be the prepared one. Generated internal names are replaced
+    by the node's support value.
+    """
+
+    def suffix(clade: Any) -> str:
+        label = ""
+        name = None if clade.name is None else str(clade.name)
+        if not clade.clades:
+            label = _newick_label(name or "")
+        elif name and (name in input_names or not name.startswith("internal_node_")):
+            label = _newick_label(name)
+        else:
+            label = _newick_number(clade.confidence) or ""
+        length = _newick_number(clade.branch_length)
+        return label + (":" + length if length is not None else "")
+
+    parts: list[str] = []
+    stack: list[Any] = [tree.root]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not item.clades:
+            parts.append(suffix(item))
+            continue
+        parts.append("(")
+        stack.append(")" + suffix(item))
+        for index, child in enumerate(reversed(item.clades)):
+            if index:
+                stack.append(",")
+            stack.append(child)
+    return "".join(parts) + ";"
 
 
 def _construction_key(request: PhytclustRequest, tree_key: Any) -> tuple:
@@ -263,9 +406,6 @@ def run_phytclust(request: PhytclustRequest):
 
 def _run_phytclust(request: PhytclustRequest):
     """Parse the tree, select partitions, and store the response."""
-    global LAST_PC, LAST_RESULT, LAST_NEWICK, LAST_CONSTRUCTION_KEY
-    notes: list[str] = []
-
     if not request.newick.strip():
         raise HTTPException(status_code=400, detail="Empty Newick string.")
 
@@ -277,14 +417,9 @@ def _run_phytclust(request: PhytclustRequest):
             status_code=400, detail=f"Could not parse Newick: {error}"
         ) from error
     tree_key = tree_fingerprint(parsed.root)
-
-    if PUBLIC_MODE:
-        n_tips = sum(1 for _ in terminals(parsed.root))
-        if n_tips > PUBLIC_MAX_TIPS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Tree has {n_tips} tips; the public demo is limited to {PUBLIC_MAX_TIPS}.",
-            )
+    input_names = {
+        str(clade.name) for clade in parsed.find_clades() if clade.name is not None
+    }
 
     mode = request.mode.lower()
     if mode not in {"k", "global", "resolution"}:
@@ -303,7 +438,8 @@ def _run_phytclust(request: PhytclustRequest):
             match_child_order(pc.tree.root, parsed.root)
         pc.compute_all_clusters = request.compute_all_clusters
         if mode != "k":
-            pc.k = None
+            pc.exact_k = None
+        construction_notes = list(LAST_CONSTRUCTION_NOTES)
         logger.debug("Reusing the previous clustering instance.")
     else:
         try:
@@ -336,7 +472,8 @@ def _run_phytclust(request: PhytclustRequest):
             if outlier_kwargs:
                 kwargs["outlier"] = OutlierConfig(**outlier_kwargs)
 
-            pc = PhytClust(**kwargs)
+            with _library_warnings() as construction_notes:
+                pc = PhytClust(**kwargs)
         except PhytClustError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except (ValueError, TypeError) as error:
@@ -348,65 +485,8 @@ def _run_phytclust(request: PhytclustRequest):
             )
 
     try:
-        peak_settings = None
-        if mode != "k":
-            peak_kwargs: dict[str, Any] = {
-                "prominence_weight": request.prominence_weight
-            }
-            if request.ranking_mode:
-                peak_kwargs["ranking_mode"] = request.ranking_mode
-            if request.min_prominence is not None:
-                peak_kwargs["min_prominence"] = request.min_prominence
-            if request.use_relative_prominence:
-                peak_kwargs["use_relative_prominence"] = True
-            if request.boundary_window_size is not None:
-                peak_kwargs["boundary_window_size"] = request.boundary_window_size
-            if request.boundary_ratio_threshold is not None:
-                peak_kwargs["boundary_ratio_threshold"] = (
-                    request.boundary_ratio_threshold
-                )
-            peak_kwargs["exclude_k2"] = bool(request.exclude_k2)
-
-            peak_settings = PeakConfig(**peak_kwargs)
-
-        if mode == "k":
-            if request.k is None:
-                raise HTTPException(
-                    status_code=400, detail="k must be provided in k-mode."
-                )
-            result = pc.run(
-                k=request.k,
-                top_n=1,
-                by_resolution=False,
-                plot_scores=False,
-                peak_config=peak_settings,
-            )
-
-        elif mode == "resolution":
-            result = pc.run(
-                k=None,
-                top_n=request.top_n,
-                by_resolution=True,
-                num_bins=request.num_bins,
-                max_k=request.max_k,
-                max_k_limit=request.max_k_limit,
-                plot_scores=False,
-                peak_config=peak_settings,
-            )
-
-        elif mode == "global":
-            result = pc.run(
-                k=None,
-                top_n=request.top_n,
-                by_resolution=False,
-                max_k=request.max_k,
-                max_k_limit=request.max_k_limit,
-                plot_scores=False,
-                peak_config=peak_settings,
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Invalid mode.")
-
+        with _library_warnings() as run_notes:
+            result = _run_selection(pc, request, mode)
     except HTTPException:
         raise
     except PhytClustError as e:
@@ -414,21 +494,107 @@ def _run_phytclust(request: PhytclustRequest):
     except Exception:
         logger.exception("PhytClust run failed")
         raise HTTPException(status_code=500, detail="PhytClust internal error.")
+    notes = list(construction_notes)
+    notes.extend(note for note in run_notes if note not in notes)
+
+    return _store_run(
+        pc,
+        result,
+        request,
+        notes,
+        newick=newick,
+        clustered_newick=_clustered_newick(pc.tree, input_names),
+        construction_key=current_key,
+        construction_notes=construction_notes,
+    )
+
+
+def _run_selection(pc: PhytClust, request: PhytclustRequest, mode: str) -> dict:
+    """Run the selection mode requested by the GUI and return the result."""
+    peak_settings = None
+    if mode != "k":
+        peak_kwargs: dict[str, Any] = {"prominence_weight": request.prominence_weight}
+        if request.ranking_mode:
+            peak_kwargs["ranking_mode"] = request.ranking_mode
+        if request.min_prominence is not None:
+            peak_kwargs["min_prominence"] = request.min_prominence
+        if request.use_relative_prominence:
+            peak_kwargs["use_relative_prominence"] = True
+        if request.boundary_window_size is not None:
+            peak_kwargs["boundary_window_size"] = request.boundary_window_size
+        if request.boundary_ratio_threshold is not None:
+            peak_kwargs["boundary_ratio_threshold"] = request.boundary_ratio_threshold
+        peak_kwargs["exclude_k2"] = bool(request.exclude_k2)
+
+        peak_settings = PeakConfig(**peak_kwargs)
+
+    if mode == "k":
+        if request.k is None:
+            raise HTTPException(status_code=400, detail="k must be provided in k-mode.")
+        return pc.run(
+            k=request.k,
+            top_n=1,
+            by_resolution=False,
+            plot_scores=False,
+            peak_config=peak_settings,
+        )
+    if mode == "resolution":
+        return pc.run(
+            k=None,
+            top_n=request.top_n,
+            by_resolution=True,
+            num_bins=request.num_bins,
+            max_k=request.max_k,
+            max_k_limit=request.max_k_limit,
+            plot_scores=False,
+            peak_config=peak_settings,
+        )
+    if mode == "global":
+        return pc.run(
+            k=None,
+            top_n=request.top_n,
+            by_resolution=False,
+            max_k=request.max_k,
+            max_k_limit=request.max_k_limit,
+            plot_scores=False,
+            peak_config=peak_settings,
+        )
+    raise HTTPException(status_code=400, detail="Invalid mode.")
+
+
+def _store_run(
+    pc: PhytClust,
+    result: dict[str, Any],
+    request: PhytclustRequest,
+    notes: list[str],
+    *,
+    newick: str,
+    clustered_newick: str,
+    construction_key: tuple,
+    construction_notes: list[str],
+) -> dict[str, Any]:
+    """Build the JSON response, cache it, and remember the instance for reuse.
+
+    ``newick`` is the normalized request tree used to detect child-order
+    changes; ``clustered_newick`` is the tree returned for drawing.
+    """
+    global LAST_PC, LAST_RESULT, LAST_NEWICK, LAST_CONSTRUCTION_KEY
+    global LAST_CONSTRUCTION_NOTES
 
     clusters_json = _serialize_clusters(result.get("clusters"))
     scores = result.get("scores")
     if scores is not None:
-        scores = [_safe_float(value) for value in scores]
+        scores = [_json_float(value) for value in scores]
 
     all_clusters_json = None
     all_ks = None
     all_alphas = None
-    if request.compute_all_clusters and pc.clusters:
-        sorted_ks = sorted(pc.clusters.keys())
+    if request.compute_all_clusters and pc.cluster_maps:
+        sorted_ks = sorted(pc.cluster_maps.keys())
         all_ks = sorted_ks
-        all_clusters_json = _serialize_clusters([pc.clusters[kv] for kv in sorted_ks])
+        all_clusters_json = _serialize_clusters([pc.cluster_maps[k] for k in sorted_ks])
         all_alphas = [
-            _safe_float(pc.alpha_info(kv, pc.clusters[kv])["alpha"]) for kv in sorted_ks
+            _json_float(pc.alpha_info(k, pc.cluster_maps[k])["alpha"]) for k in sorted_ks
         ]
 
     alpha_details = result.get("alpha_details") or []
@@ -437,10 +603,10 @@ def _run_phytclust(request: PhytclustRequest):
     bin_ranges = None
     peaks_by_resolution = None
     if result.get("mode") == "resolution":
-        raw_ranges = getattr(pc, "bin_ranges_current", None)
+        raw_ranges = pc.bin_ranges_current
         if raw_ranges:
             bin_ranges = [[int(lo), int(hi)] for lo, hi in raw_ranges]
-        raw_pbr = getattr(pc, "peaks_by_resolution", None)
+        raw_pbr = pc.peaks_by_resolution
         if isinstance(raw_pbr, dict):
             peaks_by_resolution = {
                 str(label): [int(count) for count in (cluster_counts or [])]
@@ -449,6 +615,7 @@ def _run_phytclust(request: PhytclustRequest):
 
     payload = {
         "mode": result.get("mode"),
+        "requested_mode": request.mode,
         "selected_k": result.get("selected_k"),
         "k_values": result.get("k_values"),
         "k": result.get("k"),
@@ -456,11 +623,11 @@ def _run_phytclust(request: PhytclustRequest):
         "peaks": result.get("peaks"),
         "bin_ranges": bin_ranges,
         "peaks_by_resolution": peaks_by_resolution,
-        "alphas": [_safe_float(a) for a in alphas],
+        "alphas": [_json_float(a) for a in alphas],
         "alpha_details": [
             {
                 name: (
-                    _safe_float(value)
+                    _json_float(value)
                     if isinstance(value, Real) and not isinstance(value, bool)
                     else value
                 )
@@ -468,9 +635,8 @@ def _run_phytclust(request: PhytclustRequest):
             }
             for detail in alpha_details
         ],
-        "outgroup": result.get("outgroup"),
         "notes": [str(n) for n in notes if n is not None],
-        "newick": newick,
+        "newick": clustered_newick,
         "scores": scores,
         "clusters": clusters_json,
         "all_clusters": all_clusters_json,
@@ -484,7 +650,8 @@ def _run_phytclust(request: PhytclustRequest):
     _cache_put(run_id, pc, payload)
     LAST_PC = pc
     LAST_NEWICK = newick
-    LAST_CONSTRUCTION_KEY = current_key
+    LAST_CONSTRUCTION_KEY = construction_key
+    LAST_CONSTRUCTION_NOTES = list(construction_notes)
     LAST_RESULT = payload
     return payload
 
@@ -501,15 +668,19 @@ class SaveRequest(BaseModel):
     run_id: Optional[str] = None
 
 
-def _safe_results_dir(directory: str) -> Path:
-    """Require an output directory inside the server working directory."""
+def _results_dir(directory: str) -> Path:
+    """Require an output directory inside the server working directory.
+
+    A leading ``~`` is expanded to the home directory before the check, so
+    ``~/results`` is accepted only when it lies inside the working directory.
+    """
     root = Path.cwd().resolve()
     try:
-        candidate = Path(directory)
+        candidate = Path(directory).expanduser()
         candidate = (
             candidate if candidate.is_absolute() else root / candidate
         ).resolve()
-    except (OSError, ValueError) as e:
+    except (OSError, RuntimeError, ValueError) as e:
         raise HTTPException(
             status_code=400, detail=f"Invalid output directory {directory!r}: {e}"
         )
@@ -534,18 +705,13 @@ def save_results(request: SaveRequest):
 
 def _save_results(request: SaveRequest):
     """Write a displayed table, a stored run, or the current clustering result."""
-    if PUBLIC_MODE:
-        raise HTTPException(
-            status_code=403,
-            detail="Save to server is disabled in public mode. Use Export TSV instead.",
-        )
-    pc, result = _require_last_result(request.run_id)
+    pc, result = _cache_get(request.run_id)
     try:
-        filename = _safe_filename(request.filename)
+        filename = _export_filename(request.filename)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    out_dir = _safe_results_dir(request.results_dir)
+    out_dir = _results_dir(request.results_dir)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -553,24 +719,30 @@ def _save_results(request: SaveRequest):
             status_code=400,
             detail=f"Cannot create output directory '{request.results_dir}': {e}",
         )
+    target = out_dir / filename
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Output path {filename!r} exists and is not a regular file.",
+        )
 
     try:
         if request.tsv is not None:
-            (out_dir / filename).write_text(request.tsv, encoding="utf-8")
+            target.write_text(request.tsv, encoding="utf-8")
         elif request.run_id is not None:
             export_settings = ExportTSVRequest(
                 top_n=request.top_n,
                 outlier=request.outlier,
                 output_all=request.output_all,
             )
-            (out_dir / filename).write_text(
-                _historical_tsv(result, export_settings), encoding="utf-8"
+            target.write_text(
+                _run_tsv(result, export_settings), encoding="utf-8"
             )
         else:
             saved_path = pc.save(
                 results_dir=str(out_dir),
                 top_n=request.top_n,
-                filename=request.filename,
+                filename=filename,
                 outlier=request.outlier,
                 output_all=request.output_all,
             )
@@ -581,7 +753,7 @@ def _save_results(request: SaveRequest):
         return {
             "status": "ok",
             "results_dir": str(out_dir),
-            "filename": request.filename,
+            "filename": filename,
         }
     except HTTPException:
         raise
@@ -602,7 +774,7 @@ class ExportTSVRequest(BaseModel):
     run_id: Optional[str] = None
 
 
-def _historical_tsv(result: dict[str, Any], request: ExportTSVRequest) -> str:
+def _run_tsv(result: dict[str, Any], request: ExportTSVRequest) -> str:
     """Build a TSV from saved assignments without rerunning clustering."""
     if request.output_all:
         cluster_counts = result.get("all_ks") or []
@@ -644,11 +816,11 @@ def _historical_tsv(result: dict[str, Any], request: ExportTSVRequest) -> str:
 def export_tsv(request: ExportTSVRequest):
     """Download the requested run, or the latest run when no ID is supplied."""
     with _RUN_LOCK:
-        _, result = _require_last_result(request.run_id)
+        _, result = _cache_get(request.run_id)
     try:
-        _safe_filename(request.filename)
+        _export_filename(request.filename)
         return PlainTextResponse(
-            content=_historical_tsv(result, request),
+            content=_run_tsv(result, request),
             media_type="text/tab-separated-values",
         )
     except ValueError as error:

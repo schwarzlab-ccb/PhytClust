@@ -33,9 +33,7 @@
 .sidebar-section:last-child {
   border-bottom: none;
 }
-/* The first two sections (Tree, Rooting) are the highest-priority controls
-   so we give them slightly more breathing room than the lower-priority ones
-   to anchor the user's eye. */
+/* Tree and Rooting get a little more space. */
 .sidebar-section:nth-child(1),
 .sidebar-section:nth-child(2),
 .sidebar-section:nth-child(3) {
@@ -211,9 +209,7 @@
   margin-top: 2px;
 }
 
-/* Compact variant — used in collapsed param panels where vertical space
-   matters more than breathing room. Pairs with smaller inputs and tighter
-   stacking so a section can show 4-5 controls without scrolling. */
+/* Compact variant for collapsed panels. */
 .form-group.compact {
   margin-bottom: 8px;
 }
@@ -261,12 +257,6 @@ select.form-input {
   background-position: right 10px center;
   padding-right: 28px;
   cursor: pointer;
-}
-
-.section-divider {
-  border: none;
-  border-top: 1px solid var(--pc-border-subtle);
-  margin: 12px 0;
 }
 
 /* ===================== MODE SELECTOR ===================== */
@@ -421,7 +411,7 @@ select.form-input {
   width: 100%;
   height: 40px;
   background: var(--pc-accent);
-  color: #fff;
+  color: var(--pc-on-accent);
   border: none;
   border-radius: var(--pc-radius-md);
   font-size: 14px;

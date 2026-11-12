@@ -42,7 +42,7 @@
             <textarea
               id="newick-input"
               rows="3"
-              placeholder="(A:0.1,B:0.2,(C:0.3,D:0.4):0.5);"
+              placeholder="((A:1,B:1):5,(C:1,D:1):5,(E:1,F:1):5);"
             ></textarea>
           </div>
         </div>
@@ -51,19 +51,19 @@
         <div class="sidebar-section">
           <div class="section-title">Rooting</div>
           <div class="form-group compact">
-            <label for="extra-outgroup">Outgroup</label>
+            <label for="outgroup">Outgroup</label>
             <input
               type="text"
-              id="extra-outgroup"
+              id="outgroup"
               class="form-input"
               placeholder="Taxon to exclude"
             />
           </div>
           <div class="form-group compact">
-            <label for="extra-root-taxon">Root taxon</label>
+            <label for="root-taxon">Root taxon</label>
             <input
               type="text"
-              id="extra-root-taxon"
+              id="root-taxon"
               class="form-input"
               placeholder='Taxon name or "midpoint"'
             />
@@ -85,33 +85,33 @@
             </button>
           </div>
 
-          <div id="mode-params" style="margin-top: 10px">
+          <div style="margin-top: 10px">
             <div class="form-group compact" id="param-k" style="display: none">
-              <label for="extra-k">Number of clusters (k)</label>
+              <label for="k">Number of clusters (k)</label>
               <input
                 type="number"
                 min="2"
-                id="extra-k"
+                id="k"
                 class="form-input"
                 placeholder="e.g. 5"
               />
             </div>
-            <div class="form-group compact" id="param-topn">
-              <label for="extra-topn">Top N peaks</label>
+            <div class="form-group compact" id="param-top-n">
+              <label for="top-n">Top N peaks</label>
               <input
                 type="number"
                 min="1"
-                id="extra-topn"
+                id="top-n"
                 class="form-input"
                 placeholder="1"
               />
             </div>
             <div class="form-group compact" id="param-bins" style="display: none">
-              <label for="extra-bins">Resolution bins</label>
+              <label for="bins">Resolution bins</label>
               <input
                 type="number"
                 min="2"
-                id="extra-bins"
+                id="bins"
                 class="form-input"
                 placeholder="3"
               />
@@ -120,7 +120,7 @@
           <div class="toggle-row" style="margin-top: 10px">
             <span class="toggle-label">Compute all k</span>
             <label class="toggle-switch">
-              <input type="checkbox" id="extra-compute-all" />
+              <input type="checkbox" id="compute-all" />
               <span class="slider"></span>
             </label>
           </div>
@@ -141,22 +141,22 @@
           <div id="refine-opts-body" class="collapse-body">
             <h4 class="subsection-title">k bounds</h4>
             <div class="form-group compact">
-              <label for="extra-maxk">Max k</label>
+              <label for="max-k">Max k</label>
               <input
                 type="number"
                 min="4"
-                id="extra-maxk"
+                id="max-k"
                 class="form-input"
                 placeholder="auto"
               />
               <div class="hint">Upper bound on cluster count</div>
             </div>
             <div class="form-group compact">
-              <label for="extra-min-cluster-size">Min cluster size</label>
+              <label for="min-cluster-size">Min cluster size</label>
               <input
                 type="number"
                 min="1"
-                id="extra-min-cluster-size"
+                id="min-cluster-size"
                 class="form-input"
                 placeholder="1"
               />
@@ -166,16 +166,16 @@
             <div class="toggle-row">
               <span class="toggle-label">Mark outliers</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="extra-outlier" checked />
+                <input type="checkbox" id="mark-outliers" checked />
                 <span class="slider"></span>
               </label>
             </div>
             <div class="form-group compact">
-              <label for="extra-outlier-threshold">Size threshold</label>
+              <label for="outlier-threshold">Size threshold</label>
               <input
                 type="number"
                 min="1"
-                id="extra-outlier-threshold"
+                id="outlier-threshold"
                 class="form-input"
                 placeholder="2"
               />
@@ -184,21 +184,21 @@
 
             <h4 class="subsection-title">Peak detection</h4>
             <div class="form-group compact">
-              <label for="extra-prominence-weight">Prominence weight</label>
+              <label for="prominence-weight">Prominence weight</label>
               <input
                 type="number"
                 step="0.05"
                 min="0"
                 max="1"
-                id="extra-prominence-weight"
+                id="prominence-weight"
                 class="form-input"
                 placeholder="0.7"
               />
               <div class="hint">0 = score · 1 = prominence</div>
             </div>
             <div class="form-group compact">
-              <label for="extra-ranking-mode">Ranking mode</label>
-              <select id="extra-ranking-mode" class="form-input">
+              <label for="ranking-mode">Ranking mode</label>
+              <select id="ranking-mode" class="form-input">
                 <option value="adjusted">Adjusted</option>
                 <option value="raw">Raw</option>
               </select>
@@ -220,25 +220,25 @@
           <div id="expert-opts-body" class="collapse-body">
             <h4 class="subsection-title">Advanced k tuning</h4>
             <div class="form-group compact">
-              <label for="extra-maxklimit">Max k fraction</label>
+              <label for="max-k-limit">Max k fraction</label>
               <input
                 type="number"
                 step="0.01"
                 min="0.01"
                 max="1"
-                id="extra-maxklimit"
+                id="max-k-limit"
                 class="form-input"
                 placeholder="0.9"
               />
               <div class="hint">max_k = ceil(fraction × leaves)</div>
             </div>
             <div class="form-group compact">
-              <label for="extra-min-prominence">Min prominence</label>
+              <label for="min-prominence">Min prominence</label>
               <input
                 type="number"
                 step="0.01"
                 min="0"
-                id="extra-min-prominence"
+                id="min-prominence"
                 class="form-input"
                 placeholder="auto"
               />
@@ -246,14 +246,14 @@
             <div class="toggle-row">
               <span class="toggle-label">Relative prominence</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="extra-relative-prom" />
+                <input type="checkbox" id="relative-prominence" />
                 <span class="slider"></span>
               </label>
             </div>
             <div class="toggle-row" title="Skip k=2 as a peak; pick the next-ranked peak instead (in resolution mode, the next-ranked peak in that bin).">
               <span class="toggle-label">Ignore k=2</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="extra-exclude-k2" />
+                <input type="checkbox" id="exclude-k2" />
                 <span class="slider"></span>
               </label>
             </div>
@@ -262,13 +262,13 @@
             <div class="toggle-row">
               <span class="toggle-label">Prefer fewer outliers</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="extra-outlier-prefer-fewer" />
+                <input type="checkbox" id="outlier-prefer-fewer" />
                 <span class="slider"></span>
               </label>
             </div>
             <div class="form-group compact">
-              <label for="extra-outlier-ratio-mode">Ratio mode</label>
-              <select id="extra-outlier-ratio-mode" class="form-input">
+              <label for="outlier-ratio-mode">Ratio mode</label>
+              <select id="outlier-ratio-mode" class="form-input">
                 <option value="exp">Exponential</option>
                 <option value="inverse">Inverse</option>
                 <option value="power">Power</option>
@@ -277,8 +277,8 @@
 
             <h4 class="subsection-title">Polytomy</h4>
             <div class="form-group compact" title="Soft: a multifurcation is unresolved branching, so any group of two or more of its children may form a cluster (limited to 12 children per node). Hard: the children diverged at once; a cluster takes all of them or lies within one.">
-              <label for="extra-polytomy-mode">Polytomy mode</label>
-              <select id="extra-polytomy-mode" class="form-input">
+              <label for="polytomy-mode">Polytomy mode</label>
+              <select id="polytomy-mode" class="form-input">
                 <option value="soft">Soft</option>
                 <option value="hard">Hard</option>
               </select>
@@ -286,7 +286,7 @@
             <div class="toggle-row">
               <span class="toggle-label">No split zero-length</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="extra-no-split-zero" />
+                <input type="checkbox" id="no-split-zero" />
                 <span class="slider"></span>
               </label>
             </div>
@@ -298,29 +298,29 @@
             <div class="toggle-row">
               <span class="toggle-label">Use branch support</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="extra-use-support" />
+                <input type="checkbox" id="use-support" />
                 <span class="slider"></span>
               </label>
             </div>
             <div class="form-group compact">
-              <label for="extra-min-support">Min support</label>
+              <label for="min-support">Min support</label>
               <input
                 type="number"
                 step="0.01"
                 min="0"
                 max="1"
-                id="extra-min-support"
+                id="min-support"
                 class="form-input"
                 placeholder="0.05"
               />
             </div>
             <div class="form-group compact">
-              <label for="extra-support-weight">Support weight</label>
+              <label for="support-weight">Support weight</label>
               <input
                 type="number"
                 step="0.1"
                 min="0"
-                id="extra-support-weight"
+                id="support-weight"
                 class="form-input"
                 placeholder="1.0"
               />
@@ -338,15 +338,12 @@
             </div>
 
             <div style="margin-top: 10px">
-              <button id="btn-extra-reset" class="btn-ghost danger" type="button">
+              <button id="btn-reset-params" class="btn-ghost danger" type="button">
                 Reset all to defaults
               </button>
             </div>
           </div>
         </div>
-
-        <!-- Hidden checkbox for resolution mode (wired by JS) -->
-        <input type="checkbox" id="extra-resolution" style="display: none" />
 
         <!-- Actions (sticky bottom) -->
         <div class="sidebar-actions">

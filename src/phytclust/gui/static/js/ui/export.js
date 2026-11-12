@@ -1,18 +1,14 @@
-/* ============================================================
-   PhytClust – ui/export.js
-   Download, SVG/PNG export, clipboard helpers.
-   ============================================================ */
+// Download figures, assignments, and copied images.
 
 import { state, withRenderOverrides } from "../state.js";
 import { drawTree } from "../tree/draw.js";
 import { showToast } from "./toast.js";
+import { markOutlierClusters } from "../utils.js";
+import { outlierMarkingSettings } from "../views/cluster_editor.js";
+import { postJson } from "../api.js";
 
-/**
- * Render-option overrides applied when "Publication style" is requested.
- * Bigger fonts, thicker strokes, fully-opaque cluster boxes — tuned for
- * inclusion in print figures rather than on-screen browsing.
- */
-export const PUBLICATION_PRESET = {
+/** Larger labels, thicker branches, and a stronger cluster-box fill for exports. */
+const PUBLICATION_PRESET = {
   branches: { width: 2.0 },
   labels: { fontSize: 12, axisFontSize: 12 },
   nodes: { leafRadius: 4.0 },
@@ -20,20 +16,16 @@ export const PUBLICATION_PRESET = {
 };
 
 /**
- * Run `fn` with the live tree temporarily redrawn under PUBLICATION_PRESET
- * (or no overrides if `usePreset` is false). The view flashes briefly while
- * the snapshot is taken, then the original render state is restored.
- *
- * `redraw` defaults to `drawTree`; callers exporting from the Compare tab
- * pass `drawComparison` so the preset actually applies to that view before
- * the snapshot.
+  * Run `fn` with the tree redrawn under PUBLICATION_PRESET (none if
+  * `usePreset` is false), then restore. `redraw` defaults to drawTree;
+  * Compare passes drawComparison.
  */
 function withExportPreset(usePreset, fn, redraw = drawTree) {
   if (!usePreset) return fn();
   return withRenderOverrides(PUBLICATION_PRESET, redraw, fn);
 }
 
-export function downloadBlob(blob, filename) {
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -46,7 +38,7 @@ export function downloadBlob(blob, filename) {
   }, 100);
 }
 
-export function getTightSvgSnapshot(svgNode, paddingPx) {
+function getTightSvgSnapshot(svgNode, paddingPx) {
   if (!svgNode) return null;
   const padding = Math.max(0, Number(paddingPx || 10));
 
@@ -124,150 +116,134 @@ export function exportSvgFromEl(selector, filename, opts = {}) {
   }, opts.redraw);
 }
 
-export function exportPngFromEl(selector, filename, dpi, opts = {}) {
+/**
+ * Snapshot the SVG under `selector` and paint it onto a canvas at `dpi`.
+ * `onCanvas(canvas)` runs once the image has rendered; `onError(message)`
+ * reports why no canvas could be produced.
+ */
+function rasterize(selector, dpi, opts, { noSvgMessage, failMessage, renderFailMessage, onCanvas }) {
   let snap = null;
   let svgNode = null;
-  withExportPreset(opts.usePreset, () => {
+  withExportPreset(opts && opts.usePreset, () => {
     svgNode = document.querySelector(selector + " svg");
     if (!svgNode) return;
     snap = getTightSvgSnapshot(svgNode, 10);
-  }, opts.redraw);
+  }, opts && opts.redraw);
   if (!svgNode) {
-    showToast("No visualization to export.", "danger");
+    showToast(noSvgMessage, "danger");
     return;
   }
   if (!snap) {
-    showToast("PNG export failed.", "danger");
+    showToast(failMessage, "danger");
     return;
   }
-  dpi = dpi || 300;
   const scale = dpi / 96;
-  const svgData = snap.svgData;
   const svgW = snap.width;
   const svgH = snap.height;
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(svgW * scale);
   canvas.height = Math.ceil(svgH * scale);
   const ctx = canvas.getContext("2d");
-  const bgColor =
+  // Same background as the page, so theme-coloured branches and labels stay visible.
+  ctx.fillStyle =
     getComputedStyle(document.documentElement)
       .getPropertyValue("--pc-bg")
       .trim() || "#ffffff";
-  ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.scale(scale, scale);
   const img = new Image();
-  const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+  const blob = new Blob([snap.svgData], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   img.onload = function () {
     ctx.drawImage(img, 0, 0, svgW, svgH);
     URL.revokeObjectURL(url);
-    canvas.toBlob(function (pngBlob) {
-      if (!pngBlob) {
-        showToast("PNG export failed.", "danger");
-        return;
-      }
-      downloadBlob(pngBlob, filename);
-      showToast(
-        "Downloaded " + filename + " at " + dpi + " DPI",
-        "success",
-        3000,
-      );
-    }, "image/png");
+    onCanvas(canvas);
   };
   img.onerror = function () {
     URL.revokeObjectURL(url);
-    showToast("PNG rendering failed.", "danger");
+    showToast(renderFailMessage, "danger");
   };
   img.src = url;
 }
 
+export function exportPngFromEl(selector, filename, dpi, opts = {}) {
+  dpi = dpi || 300;
+  rasterize(selector, dpi, opts, {
+    noSvgMessage: "No visualization to export.",
+    failMessage: "PNG export failed.",
+    renderFailMessage: "PNG rendering failed.",
+    onCanvas(canvas) {
+      canvas.toBlob(function (pngBlob) {
+        if (!pngBlob) {
+          showToast("PNG export failed.", "danger");
+          return;
+        }
+        downloadBlob(pngBlob, filename);
+        showToast(
+          "Downloaded " + filename + " at " + dpi + " DPI",
+          "success",
+          3000,
+        );
+      }, "image/png");
+    },
+  });
+}
+
 export function copyRasterToClipboard(selector, dpi, mimeType, opts = {}) {
-  var snap = null;
-  var svgNode = null;
-  withExportPreset(opts && opts.usePreset, function () {
-    svgNode = document.querySelector(selector + " svg");
-    if (!svgNode) return;
-    snap = getTightSvgSnapshot(svgNode, 10);
-  }, opts && opts.redraw);
-  if (!svgNode) {
-    showToast("Nothing to copy.", "danger");
-    return;
-  }
-  if (!snap) {
-    showToast("Copy failed.", "danger");
-    return;
-  }
   dpi = dpi || 300;
   mimeType = mimeType || "image/png";
   var fmtLabel = mimeType === "image/jpeg" ? "JPG" : "PNG";
-  var scale = dpi / 96;
-  var svgData = snap.svgData;
-  var svgW = snap.width;
-  var svgH = snap.height;
-  var canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(svgW * scale);
-  canvas.height = Math.ceil(svgH * scale);
-  var ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.scale(scale, scale);
-  var img = new Image();
-  var blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-  var url = URL.createObjectURL(blob);
-  img.onload = function () {
-    ctx.drawImage(img, 0, 0, svgW, svgH);
-    URL.revokeObjectURL(url);
-    if (mimeType === "image/jpeg") {
-      canvas.toBlob(
-        function (jpgBlob) {
-          if (!jpgBlob) {
-            showToast("JPG render failed.", "danger");
-            return;
-          }
-          downloadBlob(jpgBlob, "phytclust_tree.jpg");
-          showToast("Downloaded JPG at " + dpi + " DPI", "success", 2000);
-        },
-        "image/jpeg",
-        0.95,
-      );
-      return;
-    }
-    canvas.toBlob(function (pngBlob) {
-      if (!pngBlob) {
-        showToast(fmtLabel + " copy failed.", "danger");
+  rasterize(selector, dpi, opts, {
+    noSvgMessage: "Nothing to copy.",
+    failMessage: "Copy failed.",
+    renderFailMessage: fmtLabel + " rendering failed.",
+    onCanvas(canvas) {
+      if (mimeType === "image/jpeg") {
+        canvas.toBlob(
+          function (jpgBlob) {
+            if (!jpgBlob) {
+              showToast("JPG render failed.", "danger");
+              return;
+            }
+            downloadBlob(jpgBlob, "phytclust_tree.jpg");
+            showToast("Downloaded JPG at " + dpi + " DPI", "success", 2000);
+          },
+          "image/jpeg",
+          0.95,
+        );
         return;
       }
-      try {
-        var item = new ClipboardItem({ "image/png": pngBlob });
-        navigator.clipboard.write([item]).then(
-          function () {
-            showToast(
-              fmtLabel + " copied to clipboard (" + dpi + " DPI)",
-              "success",
-              2000,
-            );
-          },
-          function () {
-            showToast(
-              "Clipboard write failed — try the Export menu instead.",
-              "danger",
-            );
-          },
-        );
-      } catch (e) {
-        showToast(
-          "Clipboard API not supported — try the Export menu instead.",
-          "danger",
-        );
-      }
-    }, "image/png");
-  };
-  img.onerror = function () {
-    URL.revokeObjectURL(url);
-    showToast(fmtLabel + " rendering failed.", "danger");
-  };
-  img.src = url;
+      canvas.toBlob(function (pngBlob) {
+        if (!pngBlob) {
+          showToast(fmtLabel + " copy failed.", "danger");
+          return;
+        }
+        try {
+          var item = new ClipboardItem({ "image/png": pngBlob });
+          navigator.clipboard.write([item]).then(
+            function () {
+              showToast(
+                fmtLabel + " copied to clipboard (" + dpi + " DPI)",
+                "success",
+                2000,
+              );
+            },
+            function () {
+              showToast(
+                "Clipboard write failed — try the Export menu instead.",
+                "danger",
+              );
+            },
+          );
+        } catch (e) {
+          showToast(
+            "Clipboard API not supported — try the Export menu instead.",
+            "danger",
+          );
+        }
+      }, "image/png");
+    },
+  });
 }
 
 export function copySvgToClipboard(selector, opts = {}) {
@@ -292,23 +268,18 @@ export function copySvgToClipboard(selector, opts = {}) {
   );
 }
 
-function currentTSV() {
-  const cmap = state.CURRENT_CLUSTERS || {};
-  const names = Object.keys(cmap);
+/**
+  * The displayed assignments as TSV, with the same outlier marking as the tree.
+ */
+export function currentTSV() {
+  const raw = state.runClusters || {};
+  const names = Object.keys(raw);
   if (!names.length) {
     return null;
   }
-  const counts = {};
-  for (const name of names) counts[cmap[name]] = (counts[cmap[name]] || 0) + 1;
-  const k = Object.keys(counts).length;
-  const markEl = document.getElementById("extra-outlier");
-  const markOutliers = !markEl || markEl.checked;
-  const threshEl = document.getElementById("extra-outlier-threshold");
-  const thresh = threshEl && threshEl.value !== "" ? parseInt(threshEl.value, 10) : NaN;
-  const isOutlier = (cid) =>
-    markOutliers &&
-    (Number.isFinite(thresh) ? counts[cid] < thresh : counts[cid] === 1);
-  const rows = names.map((name) => name + "\t" + (isOutlier(cmap[name]) ? -1 : cmap[name]));
+  const displayed = markOutlierClusters(raw, outlierMarkingSettings());
+  const k = new Set(Object.values(raw)).size;
+  const rows = names.map((name) => name + "\t" + displayed[name]);
   return {
     text: "Node Name\tclusters_k" + k + "\n" + rows.join("\n") + "\n",
     filename: `phytclust_k${k}.tsv`,
@@ -338,28 +309,14 @@ export async function saveToServer() {
   var el = document.getElementById("output-dir");
   const dir = el && el.value ? el.value : "results";
   try {
-    const res = await fetch("/api/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        results_dir: dir,
-        filename: current.filename,
-        tsv: current.text,
-      }),
+    const data = await postJson("/api/save", {
+      results_dir: dir,
+      filename: current.filename,
+      tsv: current.text,
     });
-    const text = await res.text();
-    let data = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      /* ignore */
-    }
-    if (!res.ok) {
-      throw new Error(
-        data && data.detail ? data.detail : `Request failed (${res.status})`,
-      );
-    }
-    showToast("Saved to " + dir, "success", 3000);
+    const savedDir = data && typeof data.results_dir === "string" ? data.results_dir : dir;
+    const savedName = data && typeof data.filename === "string" ? data.filename : current.filename;
+    showToast("Saved " + savedName + " to " + savedDir, "success", 4000);
   } catch (e) {
     showToast("Save failed: " + e.message, "danger");
   }

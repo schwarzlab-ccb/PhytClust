@@ -1,39 +1,90 @@
-/* ============================================================
-   PhytClust – views/optimal_k.js
-   Optimal k score plot.
-   ============================================================ */
+// Score plot, plus the score helpers the mini panel shares.
 
 import { state } from "../state.js";
 import { d3Tooltip } from "../dom.js";
-import { getThemeColors, BASE_COLORS, withAlpha } from "../colors.js";
+import { getThemeColours, baseColours, withAlpha } from "../colors.js";
 
-export function drawOptimalK(data) {
-  if (!data) data = state.latestOptimalKData;
-  var plotEl = document.getElementById("optimalk_plot");
+let axisModeWired = false;
+let axisModeInitialised = false;
+let axisModeUserOverride = false;
+
+/** Scores as {k, score} points for k >= 2 (index 0 holds the k=1 score). */
+export function scoreDataPoints(scores) {
+  const dataPoints = [];
+  for (let i = 0; i < scores.length - 1; i++)
+    dataPoints.push({ k: i + 2, score: scores[i + 1] });
+  return dataPoints;
+}
+
+/** True when a run's result carries resolution-class ranges to draw. */
+export function hasBinRanges(data) {
+  return !!(data && data.mode === "resolution" && Array.isArray(data.bin_ranges) && data.bin_ranges.length > 0);
+}
+
+/**
+ * Draw one translucent band per resolution class behind a score plot, with a
+ * dashed boundary after every class but the last. `xLeft(k)` and `xRight(k)`
+ * map a (clamped) k to the band edges. Returns the drawn bands as
+ * {x0, x1, colour, index} for labelling.
+ */
+export function drawBinBands(g, binRanges, { kMin, kMax, xLeft, xRight, innerWidth, innerHeight, dash, strokeColour }) {
+  const clamp = (k) => Math.max(kMin, Math.min(kMax, k));
+  const bands = [];
+  binRanges.forEach(([lo, hi], index) => {
+    const rawL = xLeft(clamp(lo));
+    const rawR = xRight(clamp(hi));
+    if (!isFinite(rawL) || !isFinite(rawR)) return;
+    const x0 = Math.max(0, Math.min(rawL, rawR));
+    const x1 = Math.min(innerWidth, Math.max(rawL, rawR));
+    if (x1 <= x0) return;
+    const colour = baseColours[index % baseColours.length];
+    g.append("rect")
+      .attr("class", "bin-band")
+      .attr("x", x0)
+      .attr("y", 0)
+      .attr("width", x1 - x0)
+      .attr("height", innerHeight)
+      .attr("fill", withAlpha(colour, 0.1))
+      .attr("stroke", "none");
+    if (index < binRanges.length - 1) {
+      g.append("line")
+        .attr("class", "bin-boundary")
+        .attr("x1", x1)
+        .attr("x2", x1)
+        .attr("y1", 0)
+        .attr("y2", innerHeight)
+        .attr("stroke", strokeColour)
+        .attr("stroke-width", 1)
+        .attr("stroke-dasharray", dash)
+        .attr("opacity", 0.7);
+    }
+    bands.push({ x0, x1, colour, index });
+  });
+  return bands;
+}
+
+export function drawScores(data) {
+  if (!data) data = state.lastScoresData;
+  var plotEl = document.getElementById("scores-plot");
   if (!plotEl) return;
 
   var scores = data && data.scores ? data.scores : [];
   var peaks = data && data.peaks ? data.peaks : [];
-  const tc = getThemeColors();
+  const tc = getThemeColours();
 
   if (!Array.isArray(scores) || scores.length === 0) {
     plotEl.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--pc-text-muted);">No scores available to plot.</div>';
-    window.PHYTCLUST_ORIGINAL_OPTIMALK_SVG = null;
     return;
   }
 
   plotEl.innerHTML = "";
-  var dataPoints = [];
-  for (let i = 0; i < scores.length - 1; i++)
-    dataPoints.push({ k: i + 2, score: scores[i + 1] });
+  var dataPoints = scoreDataPoints(scores);
 
-  // With only a single score (k=1) there is nothing to plot at k>=2; guard so
-  // the log/linear scale domains don't collapse to NaN and produce broken axes.
+  // A single score (k=1) gives nothing to plot and NaN scale domains.
   if (dataPoints.length === 0) {
     plotEl.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--pc-text-muted);">Not enough scores to plot (need k ≥ 2).</div>';
-    window.PHYTCLUST_ORIGINAL_OPTIMALK_SVG = null;
     return;
   }
 
@@ -46,17 +97,15 @@ export function drawOptimalK(data) {
     })
     .filter((d) => d);
 
-  var widthScaleEl = document.getElementById("optk-width-scale");
+  var widthScaleEl = document.getElementById("scores-width-scale");
   var widthScale = widthScaleEl ? parseFloat(widthScaleEl.value || "1") : 1;
   if (!isFinite(widthScale) || widthScale < 1) widthScale = 1;
 
-  // Container scrolls horizontally when the SVG is wider than the viewport.
-  // Use `scroll` (not `auto`) so the user sees the scrollbar appear.
+  // scroll, not auto, so the scrollbar is visible when the SVG is wider.
   plotEl.style.overflowX = widthScale > 1 ? "scroll" : "hidden";
   plotEl.style.overflowY = "hidden";
 
-  // clientWidth must be measured BEFORE the SVG is appended, otherwise an
-  // already-wide SVG from the previous render distorts the next baseline.
+  // Measured before the SVG is appended, since a wide SVG from the previous render would distort the width.
   var baseWidth = plotEl.clientWidth || 700;
   var width = Math.max(baseWidth, Math.round(baseWidth * widthScale));
   var height = plotEl.clientHeight || 420;
@@ -78,11 +127,11 @@ export function drawOptimalK(data) {
   var defaultMode = scores.length > 50 ? "log" : "normal";
   var mode = defaultMode;
   if (axisModeEl) {
-    if (!axisModeEl.__initialized) {
+    if (!axisModeInitialised) {
       axisModeEl.value = defaultMode;
-      axisModeEl.__initialized = true;
+      axisModeInitialised = true;
     }
-    if (axisModeEl.__userOverride) mode = axisModeEl.value || defaultMode;
+    if (axisModeUserOverride) mode = axisModeEl.value || defaultMode;
     else axisModeEl.value = defaultMode;
   }
 
@@ -120,58 +169,24 @@ export function drawOptimalK(data) {
     .range([innerHeight, 0]);
 
   // Resolution-mode bin bands (behind grid + line)
-  const isResolution =
-    data &&
-    data.mode === "resolution" &&
-    Array.isArray(data.bin_ranges) &&
-    data.bin_ranges.length > 0;
   let binLabels = null;
-  if (isResolution) {
+  if (hasBinRanges(data)) {
     const ks = dataPoints.map((d) => d.k);
-    const kMin = ks[0];
-    const kMax = ks[ks.length - 1];
-    const clamp = (k) => Math.max(kMin, Math.min(kMax, k));
-    const xLeft = (k) => xScale(clamp(k));
-    const xRight = (k) =>
-      mode === "log"
-        ? xScale(clamp(k))
-        : xScale(clamp(k)) + xScale.bandwidth();
-    binLabels = [];
-    data.bin_ranges.forEach(([lo, hi], i) => {
-      const rawL = xLeft(lo);
-      const rawR = xRight(hi);
-      if (!isFinite(rawL) || !isFinite(rawR)) return;
-      const x0 = Math.max(0, Math.min(rawL, rawR));
-      const x1 = Math.min(innerWidth, Math.max(rawL, rawR));
-      if (x1 <= x0) return;
-      const colour = BASE_COLORS[i % BASE_COLORS.length];
-      g.append("rect")
-        .attr("class", "bin-band")
-        .attr("x", x0)
-        .attr("y", 0)
-        .attr("width", x1 - x0)
-        .attr("height", innerHeight)
-        .attr("fill", withAlpha(colour, 0.1))
-        .attr("stroke", "none");
-      if (i < data.bin_ranges.length - 1) {
-        g.append("line")
-          .attr("class", "bin-boundary")
-          .attr("x1", x1)
-          .attr("x2", x1)
-          .attr("y1", 0)
-          .attr("y2", innerHeight)
-          .attr("stroke", tc.muted)
-          .attr("stroke-width", 1)
-          .attr("stroke-dasharray", "3,3")
-          .attr("opacity", 0.7);
-      }
-      binLabels.push({
-        x: (x0 + x1) / 2,
-        label: `CL${i + 1}`,
-        range: `k = ${lo}–${hi}`,
-        colour,
-      });
-    });
+    binLabels = drawBinBands(g, data.bin_ranges, {
+      kMin: ks[0],
+      kMax: ks[ks.length - 1],
+      xLeft: (k) => xScale(k),
+      xRight: (k) => (mode === "log" ? xScale(k) : xScale(k) + xScale.bandwidth()),
+      innerWidth,
+      innerHeight,
+      dash: "3,3",
+      strokeColour: tc.muted,
+    }).map(({ x0, x1, colour, index }) => ({
+      x: (x0 + x1) / 2,
+      label: `CL${index + 1}`,
+      range: `k = ${data.bin_ranges[index][0]}–${data.bin_ranges[index][1]}`,
+      colour,
+    }));
   }
 
   // Grid
@@ -239,7 +254,7 @@ export function drawOptimalK(data) {
     .text("Clustering validity index");
 
   // Line + points
-  const lineColor = tc.accent;
+  const lineColour = tc.accent;
   const line = d3
     .line()
     .x((d) =>
@@ -250,7 +265,7 @@ export function drawOptimalK(data) {
   g.append("path")
     .datum(dataPoints)
     .attr("fill", "none")
-    .attr("stroke", lineColor)
+    .attr("stroke", lineColour)
     .attr("stroke-width", 2)
     .attr("d", line);
 
@@ -264,7 +279,7 @@ export function drawOptimalK(data) {
     )
     .attr("cy", (d) => yScale(d.score))
     .attr("r", 3.5)
-    .attr("fill", lineColor)
+    .attr("fill", lineColour)
     .attr("stroke", tc.bg)
     .attr("stroke-width", 1.5)
     .on("mouseover", (event, d) =>
@@ -328,14 +343,14 @@ export function drawOptimalK(data) {
     .attr("y1", 6)
     .attr("x2", 18)
     .attr("y2", 6)
-    .attr("stroke", lineColor)
+    .attr("stroke", lineColour)
     .attr("stroke-width", 2);
   legend
     .append("circle")
     .attr("cx", 9)
     .attr("cy", 6)
     .attr("r", 3)
-    .attr("fill", lineColor);
+    .attr("fill", lineColour);
   legend
     .append("text")
     .attr("x", 24)
@@ -356,20 +371,12 @@ export function drawOptimalK(data) {
     .attr("fill", tc.internal)
     .text("Optimal k");
 
-  if (axisModeEl && !axisModeEl.__wired) {
-    axisModeEl.__wired = true;
+  if (axisModeEl && !axisModeWired) {
+    axisModeWired = true;
     axisModeEl.addEventListener("change", function () {
-      axisModeEl.__userOverride = true;
-      // Call with no argument so we re-read state.latestOptimalKData: the
-      // handler is wired once and would otherwise close over the FIRST render's
-      // `data`, redrawing a stale (previous-tree) plot after a new run.
-      drawOptimalK();
+      axisModeUserOverride = true;
+      // No argument, so the handler re-reads state.lastScoresData instead of the first render's data.
+      drawScores();
     });
   }
-
-
-  const okSvgNode = document.querySelector("#optimalk_plot svg");
-  window.PHYTCLUST_ORIGINAL_OPTIMALK_SVG = okSvgNode
-    ? new XMLSerializer().serializeToString(okSvgNode)
-    : null;
 }

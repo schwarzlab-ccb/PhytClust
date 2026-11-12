@@ -1,32 +1,23 @@
-/* ============================================================
-   PhytClust – tree/draw.js
-   The main tree renderer: drawTree (rectangular + circular),
-   fitTree, and the collapse / zoom / tooltip helpers it owns.
-   Layout, per-node metadata and the Compare renderers live in
-   tree/layout.js, tree/nodes.js and tree/compare.js.
-   ============================================================ */
+/* The main tree renderer: drawTree (rectangular + circular), fitTree, and the
+   collapse / zoom / tooltip helpers it owns. Layout, per-node metadata and the
+   Compare renderers live in tree/layout.js, tree/nodes.js and tree/compare.js. */
 
-import { state, LABEL_PAD, SELECTED_CLUSTER_IDS, BOX_LABEL_MAP, BOX_ADJUST_MAP, NODE_CUSTOM, hasClusterFocus, getBoxAdjust } from "../state.js";
+import { state, LABEL_PAD, selectedClusterIds, boxLabelMap, nodeCustom, hasClusterFocus, getBoxAdjust } from "../state.js";
 import { treeHost } from "../dom.js";
-import { getVisibleChildren, getAllChildren, collectLeafNamesData } from "../utils.js";
-import { generateClusterColors, getThemeColors } from "../colors.js";
-import { customNodeRadius, isSearchMatch, nodeDisplayName, getNodeCustom, countLeafDescendantsData, representativeClusterIdFromData, showNodeContextMenu } from "./nodes.js";
-import { computeLayouts } from "./layout.js";
+import { escapeHtmlAttr, midpointBoundaries, clusterRuns } from "../utils.js";
+import { getThemeColours } from "../colors.js";
+import { customNodeRadius, isSearchMatch, nodeDisplayName, countLeafDescendantsData, representativeClusterIdFromData, showNodeContextMenu } from "./nodes.js";
+import { computeLayouts, scorePanelReserve } from "./layout.js";
 
+const HIGHLIGHT_COLOR = "#f59e0b";
 
-/* ─────────────────────────────────────
-   Collapse helpers
-   ───────────────────────────────────── */
 function setEmptyStateVisible(visible) {
-  // Bulletproof: toggle inline display so no CSS rule can override us.
+  // Inline display, so no stylesheet rule overrides it.
   var es = document.getElementById("tree-empty-state");
   if (es) es.style.display = visible ? "flex" : "none";
 }
 
-/* ─────────────────────────────────────
-   Node tooltip positioning helper
-   ───────────────────────────────────── */
-function _positionTooltip(tip, cx, cy) {
+function positionTooltip(tip, cx, cy) {
   var tw = tip.offsetWidth || 200;
   var th = tip.offsetHeight || 80;
   var pad = 14;
@@ -40,10 +31,8 @@ function _positionTooltip(tip, cx, cy) {
 
 export function clearTree() {
   treeHost.innerHTML = "";
-  // Re-show the empty state any time the tree is wiped, unless a fresh
-  // drawTree() is about to mark it irrelevant (drawTree hides it again
-  // immediately after this call).
-  setEmptyStateVisible(!state.NEWICK_RAW_TREE);
+  // Show the empty state again when the tree is cleared; drawTree hides it when it draws.
+  setEmptyStateVisible(!state.newickTree);
   var tip = document.getElementById("node-tooltip");
   if (tip) tip.setAttribute("hidden", "");
 }
@@ -64,10 +53,7 @@ function applyTreeZoomBounds(svg, zoom, zoomLayer, previousTransform) {
   } catch {
     bbox = null;
   }
-  // Allow generous panning while keeping at least ~half a viewport of tree
-  // visible at the worst-case pan. A full-vw pad let the user pan the entire
-  // bbox off-screen, which felt like the tree had vanished. Half-vw keeps
-  // the tree always at least partially anchored in the viewport.
+  // Keeps at least half a viewport of the tree in view when panning.
   const svgNode = svg.node();
   const vw = (svgNode && svgNode.clientWidth) || 800;
   const vh = (svgNode && svgNode.clientHeight) || 600;
@@ -110,12 +96,29 @@ function toggleNodeCollapsedState(dataNode) {
   clearDescendantCollapsedFlags(dataNode);
 }
 
-/* ─────────────────────────────────────
-   Tree Drawing
-   ───────────────────────────────────── */
+function findMRCA(nodes) {
+  if (!nodes.length) return null;
+  if (nodes.length === 1) return nodes[0];
+  function ancestors(n) {
+    const a = [];
+    let cur = n;
+    while (cur) {
+      a.push(cur);
+      cur = cur.parent;
+    }
+    return a;
+  }
+  let common = ancestors(nodes[0]);
+  for (let i = 1; i < nodes.length; i++) {
+    const anc = new Set(ancestors(nodes[i]));
+    common = common.filter((n) => anc.has(n));
+  }
+  return common[0];
+}
+
 export function drawTree() {
   clearTree();
-  if (!state.NEWICK_RAW_TREE) {
+  if (!state.newickTree) {
     setEmptyStateVisible(true);
     return;
   }
@@ -123,10 +126,10 @@ export function drawTree() {
   computeLayouts();
 
   const layoutMode = state.render.layout || "rectangular";
-  const colorMode = state.render.clusters.colorMode || "bars";
-  const tc = getThemeColors();
+  const colourMode = state.render.clusters.colorMode || "bars";
+  const tc = getThemeColours();
 
-  const container = d3.select("#tree_display");
+  const container = d3.select("#tree-display");
   const width = treeHost.clientWidth || 800;
   const height = treeHost.clientHeight || 500;
   const margin = { top: 20, right: 80, bottom: 20, left: 80 };
@@ -138,9 +141,7 @@ export function drawTree() {
     .style("background", "transparent")
     .style("cursor", "grab");
 
-  // Transparent overlay so drags on empty canvas area are caught by the
-  // zoom behaviour. Without this, only drags that land on a branch/label
-  // register, which is why "press and move the tree" felt broken.
+  // Catches drags on empty canvas, which would otherwise not pan.
   svg
     .append("rect")
     .attr("class", "tree-zoom-catcher")
@@ -170,15 +171,15 @@ export function drawTree() {
     })
     .on("zoom", (event) => {
       zoomLayer.attr("transform", event.transform);
-      state.LAST_TREE_TRANSFORM = event.transform;
+      state.lastTreeTransform = event.transform;
     })
     .on("end", () => {
       svg.style("cursor", "grab");
     });
-  const previousTransform = state.LAST_TREE_TRANSFORM || d3.zoomIdentity;
-  state.LAST_TREE_SVG = svg;
-  state.LAST_TREE_ZOOM = zoom;
-  state.LAST_ZOOM_LAYER = zoomLayer;
+  const previousTransform = state.lastTreeTransform || d3.zoomIdentity;
+  state.lastTreeSvg = svg;
+  state.lastTreeZoom = zoom;
+  state.lastZoomLayer = zoomLayer;
 
   function hasOriginalChildren(d) {
     return !!(
@@ -187,9 +188,6 @@ export function drawTree() {
       Array.isArray(d.data.children) &&
       d.data.children.length > 0
     );
-  }
-  function canCollapse(d) {
-    return hasOriginalChildren(d);
   }
   function isNodeVisible(d) {
     if (!d) return false;
@@ -211,16 +209,9 @@ export function drawTree() {
   function isVisibleLeaf(d) {
     return !hasVisibleChildren(d);
   }
-  function nodeRadius(d) {
-    return customNodeRadius(d);
-  }
   function isHighlighted(d) {
     if (isSearchMatch(d.data)) return true;
-    return NODE_CUSTOM.has(d.data) && NODE_CUSTOM.get(d.data).highlighted;
-  }
-
-  function highlightColor() {
-    return "#f59e0b";
+    return nodeCustom.has(d.data) && nodeCustom.get(d.data).highlighted;
   }
 
   function isCollapsedInternal(d) {
@@ -236,8 +227,8 @@ export function drawTree() {
   }
   function wedgeFill(d) {
     var rep = representativeClusterIdFromData(d.data);
-    if (rep != null && Number(rep) >= 0 && state.CLUSTER_COLORS.length)
-      return state.CLUSTER_COLORS[Number(rep) % state.CLUSTER_COLORS.length];
+    if (rep != null && Number(rep) >= 0 && state.clusterColours.length)
+      return state.clusterColours[Number(rep) % state.clusterColours.length];
     return tc.internal;
   }
   function wedgePath(d) {
@@ -245,27 +236,27 @@ export function drawTree() {
     return "M0,0 L" + w + "," + (-h) + " L" + w + "," + h + " Z";
   }
 
-  function clusterColor(cid) {
-    if (cid == null || !state.CLUSTER_COLORS.length) return null;
+  function clusterColour(cid) {
+    if (cid == null || !state.clusterColours.length) return null;
     if (Number(cid) < 0) return tc.internal;
-    return state.CLUSTER_COLORS[cid % state.CLUSTER_COLORS.length];
+    return state.clusterColours[cid % state.clusterColours.length];
   }
 
   function nodeFill(d) {
     const name = d.data && d.data.name;
-    if (colorMode === "bars") return tc.label;
+    if (colourMode === "bars") return tc.label;
     if (name && !hasOriginalChildren(d)) {
-      const cid = state.CURRENT_CLUSTERS ? state.CURRENT_CLUSTERS[name] : null;
-      return clusterColor(cid) || tc.label;
+      const cid = state.currentClusters ? state.currentClusters[name] : null;
+      return clusterColour(cid) || tc.label;
     }
     const rep = representativeClusterIdFromData(d.data);
-    return clusterColor(rep) || tc.label;
+    return clusterColour(rep) || tc.label;
   }
 
   function nodeClusterId(d) {
     const name = d.data && d.data.name;
     if (name && !hasOriginalChildren(d)) {
-      const cid = state.CURRENT_CLUSTERS ? state.CURRENT_CLUSTERS[name] : null;
+      const cid = state.currentClusters ? state.currentClusters[name] : null;
       return cid == null ? null : Number(cid);
     }
     const rep = representativeClusterIdFromData(d.data);
@@ -273,28 +264,37 @@ export function drawTree() {
   }
 
   function clusterVisible(d) {
-    if (SELECTED_CLUSTER_IDS.size === 0) return true;
+    if (selectedClusterIds.size === 0) return true;
     const cid = nodeClusterId(d);
-    return cid != null && SELECTED_CLUSTER_IDS.has(cid);
+    return cid != null && selectedClusterIds.has(cid);
+  }
+
+  // Box grouping key. Outliers share id -1, but each original small cluster
+  // gets its own box so scattered outliers are not wrapped in one large box.
+  function boxGroupKey(d, cid) {
+    if (Number(cid) >= 0) return String(cid);
+    const name = d.data && d.data.name;
+    const rawCid = name != null && state.runClusters ? state.runClusters[name] : null;
+    return rawCid != null && Number(rawCid) >= 0 ? "outlier:" + rawCid : String(cid);
   }
 
   // Branch colouring: colour edges internal to a cluster subtree.
   // The MRCA entry branch (parent outside cluster → MRCA) keeps the default colour.
   function linkStroke(link) {
-    if (!state.render.branches.colorByClusters || !state.CLUSTER_COLORS.length)
+    if (!state.render.branches.colorByClusters || !state.clusterColours.length)
       return state.render.branches.color || tc.branch;
     const repTarget = representativeClusterIdFromData(link.target.data);
     if (repTarget == null || Number(repTarget) < 0) return state.render.branches.color || tc.branch;
     const repSource = representativeClusterIdFromData(link.source.data);
     if (repSource !== repTarget) return state.render.branches.color || tc.branch;
-    return state.CLUSTER_COLORS[Number(repTarget) % state.CLUSTER_COLORS.length];
+    return state.clusterColours[Number(repTarget) % state.clusterColours.length];
   }
 
   function linkOpacity(link) {
-    if (!state.render.branches.colorByClusters || SELECTED_CLUSTER_IDS.size === 0) return 1;
+    if (!state.render.branches.colorByClusters || selectedClusterIds.size === 0) return 1;
     const rep = representativeClusterIdFromData(link.target.data);
     if (rep == null) return 0.18;
-    return SELECTED_CLUSTER_IDS.has(Number(rep)) ? 1 : 0.18;
+    return selectedClusterIds.has(Number(rep)) ? 1 : 0.18;
   }
 
   // Wire hover tooltip on a node <g> selection. Shares local closures so it
@@ -312,7 +312,7 @@ export function drawTree() {
         lines.push(
           '<div class="tt-name">' +
             (name
-              ? name
+              ? escapeHtmlAttr(name)
               : isLeafNode
               ? "<em>unnamed leaf</em>"
               : "<em>internal node</em>") +
@@ -321,9 +321,9 @@ export function drawTree() {
         if (cid !== null) {
           var cLabel = cid < 0 ? "Outlier" : "C" + cid;
           var sz = 0;
-          if (state.CURRENT_CLUSTERS) {
+          if (state.currentClusters) {
             var cidStr = String(cid);
-            var vals = Object.values(state.CURRENT_CLUSTERS);
+            var vals = Object.values(state.currentClusters);
             for (var vi = 0; vi < vals.length; vi++) {
               if (String(vals[vi]) === cidStr) sz++;
             }
@@ -331,7 +331,7 @@ export function drawTree() {
           lines.push(
             '<div class="tt-row"><span class="tt-key">Cluster</span><span>' +
               cLabel +
-              (sz > 0 ? " &middot; " + sz + " taxa" : "") +
+              (sz > 0 ? " &middot; " + sz + " leaves" : "") +
               "</span></div>",
           );
         }
@@ -344,12 +344,12 @@ export function drawTree() {
         }
         tip.innerHTML = lines.join("");
         tip.removeAttribute("hidden");
-        _positionTooltip(tip, event.clientX, event.clientY);
+        positionTooltip(tip, event.clientX, event.clientY);
       })
       .on("mousemove.tooltip", function (event) {
         var tip = document.getElementById("node-tooltip");
         if (tip && !tip.hasAttribute("hidden"))
-          _positionTooltip(tip, event.clientX, event.clientY);
+          positionTooltip(tip, event.clientX, event.clientY);
       })
       .on("mouseleave.tooltip", function () {
         var tip = document.getElementById("node-tooltip");
@@ -359,7 +359,7 @@ export function drawTree() {
 
   // ── CIRCULAR LAYOUT ──
   if (layoutMode === "circular") {
-    const root = state.HIER_CIRC;
+    const root = state.circularHierarchy;
     const visibleNodes = root.descendants().filter((d) => isNodeVisible(d));
     const visibleLinks = root
       .links()
@@ -427,14 +427,14 @@ export function drawTree() {
 
     node
       .append("circle")
-      .attr("r", (d) => isCollapsedInternal(d) ? 0 : nodeRadius(d))
+      .attr("r", (d) => isCollapsedInternal(d) ? 0 : customNodeRadius(d))
       .attr("fill", nodeFill)
-      .attr("stroke", (d) => (isHighlighted(d) ? highlightColor() : "none"))
+      .attr("stroke", (d) => (isHighlighted(d) ? HIGHLIGHT_COLOR : "none"))
       .attr("stroke-width", (d) => (isHighlighted(d) ? 2.5 : 0))
       .attr("opacity", (d) => (clusterVisible(d) ? 1 : 0.22))
       .style("cursor", "pointer")
       .on("click", function (event, d) {
-        if (!canCollapse(d)) return;
+        if (!hasOriginalChildren(d)) return;
         toggleNodeCollapsedState(d.data);
         drawTree();
       })
@@ -476,14 +476,14 @@ export function drawTree() {
       .append("text")
       .attr("dy", "0.32em")
       .attr("font-size", state.render.labels.fontSize + "px")
-      .attr("fill", (d) => (isHighlighted(d) ? highlightColor() : tc.label))
+      .attr("fill", (d) => (isHighlighted(d) ? HIGHLIGHT_COLOR : tc.label))
       .attr("font-weight", (d) => (isHighlighted(d) ? "bold" : "normal"))
       .attr("opacity", (d) => (clusterVisible(d) ? 1 : 0.3))
       .attr("transform", function (d) {
         const a = d._angle || 0;
         let deg = (a * 180) / Math.PI - 90;
         const left = deg > 90 || deg < -90;
-        return `rotate(${deg}) translate(${nodeRadius(d) + LABEL_PAD},0) rotate(${left ? 180 : 0})`;
+        return `rotate(${deg}) translate(${customNodeRadius(d) + LABEL_PAD},0) rotate(${left ? 180 : 0})`;
       })
       .style("text-anchor", (d) => {
         const deg = ((d._angle || 0) * 180) / Math.PI - 90;
@@ -496,18 +496,18 @@ export function drawTree() {
       .append("text")
       .attr("dy", "0.32em")
       .attr("font-size", state.render.labels.fontSize - 1 + "px")
-      .attr("fill", (d) => (isHighlighted(d) ? highlightColor() : tc.internal))
+      .attr("fill", (d) => (isHighlighted(d) ? HIGHLIGHT_COLOR : tc.internal))
       .attr("opacity", (d) => (clusterVisible(d) ? 1 : 0.3))
       .attr("transform", (d) => {
         const a = d._angle || 0;
         let deg = (a * 180) / Math.PI - 90;
-        return `rotate(${deg}) translate(0,${-(nodeRadius(d) + 5)})`;
+        return `rotate(${deg}) translate(0,${-(customNodeRadius(d) + 5)})`;
       })
       .style("text-anchor", "middle")
       .text((d) => (state.render.labels.internalShow ? nodeDisplayName(d.data) : ""));
 
     // Circular cluster visualization
-    if (state.CURRENT_CLUSTERS && state.CLUSTER_COLORS.length) {
+    if (state.currentClusters && state.clusterColours.length) {
       const visLeaves = root
         .descendants()
         .filter((d) => isNodeVisible(d))
@@ -517,19 +517,12 @@ export function drawTree() {
       function visLeafCid(d) {
         const nm = d.data && d.data.name;
         const isOrigLeaf = nm && !(d.data.children && d.data.children.length);
-        if (isOrigLeaf) return state.CURRENT_CLUSTERS[nm];
+        if (isOrigLeaf) return state.currentClusters[nm];
         return representativeClusterIdFromData(d.data);
       }
 
-      if (colorMode === "bars" && visLeaves.length >= 2) {
-        const angles = visLeaves.map((d) => d._angle || 0);
-        const boundaries = new Array(visLeaves.length + 1);
-        for (let i = 1; i < visLeaves.length; i++)
-          boundaries[i] = (angles[i - 1] + angles[i]) / 2;
-        boundaries[0] = angles[0] - (boundaries[1] - angles[0]);
-        boundaries[visLeaves.length] =
-          angles[visLeaves.length - 1] +
-          (angles[visLeaves.length - 1] - boundaries[visLeaves.length - 1]);
+      if (colourMode === "bars" && visLeaves.length >= 2) {
+        const boundaries = midpointBoundaries(visLeaves.map((d) => d._angle || 0));
 
         const leafLabelChars = visLeaves.reduce(
           (mx, d) => Math.max(mx, (d.data.name || "").length),
@@ -544,69 +537,40 @@ export function drawTree() {
         const ringOuter = ringInner + 14;
         const arc = d3.arc().innerRadius(ringInner).outerRadius(ringOuter);
 
-        let runStart = 0,
-          runCid = visLeafCid(visLeaves[0]);
-        for (let i = 1; i <= visLeaves.length; i++) {
-          const cid =
-            i < visLeaves.length ? visLeafCid(visLeaves[i]) : Symbol("END");
-          if (cid !== runCid) {
-            if (runCid != null) {
-              var arcColor = clusterColor(runCid) || tc.internal;
-              var isOutlierArc = Number(runCid) < 0;
-              var arcEl = g
-                .append("path")
-                .attr(
-                  "d",
-                  arc.startAngle(boundaries[runStart]).endAngle(boundaries[i]),
-                )
-                .attr("fill", isOutlierArc ? "none" : arcColor)
-                .attr("stroke", isOutlierArc ? arcColor : "none")
-                .attr("stroke-width", isOutlierArc ? 1.5 : 0)
-                .attr("opacity", hasClusterFocus(runCid) ? 0.75 : 0.18);
-              if (isOutlierArc) arcEl.attr("stroke-dasharray", "4,2");
-            }
-            runStart = i;
-            runCid = i < visLeaves.length ? cid : null;
-          }
+        for (const run of clusterRuns(visLeaves.length, (i) => visLeafCid(visLeaves[i]))) {
+          var arcColour = clusterColour(run.cid) || tc.internal;
+          var isOutlierArc = Number(run.cid) < 0;
+          var arcEl = g
+            .append("path")
+            .attr(
+              "d",
+              arc.startAngle(boundaries[run.start]).endAngle(boundaries[run.end]),
+            )
+            .attr("fill", isOutlierArc ? "none" : arcColour)
+            .attr("stroke", isOutlierArc ? arcColour : "none")
+            .attr("stroke-width", isOutlierArc ? 1.5 : 0)
+            .attr("opacity", hasClusterFocus(run.cid) ? 0.75 : 0.18);
+          if (isOutlierArc) arcEl.attr("stroke-dasharray", "4,2");
         }
         g.selectAll(".tree-link, .tree-node").raise();
       }
 
       // Circular boxes: wedge-shaped arcs from MRCA radius to leaf tips
-      if (colorMode === "boxes" && visLeaves.length >= 2) {
+      if (colourMode === "boxes" && visLeaves.length >= 2) {
         var circClusterGroups = {};
         visLeaves.forEach(function (d) {
           var cid = visLeafCid(d);
           if (cid == null) return;
           if (!state.render.clusters.showOutlierBoxes && Number(cid) < 0) return;
-          if (!circClusterGroups[cid]) circClusterGroups[cid] = [];
-          circClusterGroups[cid].push(d);
+          var key = boxGroupKey(d, cid);
+          if (!circClusterGroups[key]) circClusterGroups[key] = { cid: cid, leaves: [] };
+          circClusterGroups[key].leaves.push(d);
         });
-        function findMRCACirc(nodes) {
-          if (!nodes.length) return null;
-          if (nodes.length === 1) return nodes[0];
-          function ancestors(n) {
-            var a = [];
-            var cur = n;
-            while (cur) {
-              a.push(cur);
-              cur = cur.parent;
-            }
-            return a;
-          }
-          var common = ancestors(nodes[0]);
-          for (var i = 1; i < nodes.length; i++) {
-            var anc = new Set(ancestors(nodes[i]));
-            common = common.filter(function (n) {
-              return anc.has(n);
-            });
-          }
-          return common[0];
-        }
         var boxesG = g.append("g").attr("class", "cluster-boxes");
-        for (var cid of Object.keys(circClusterGroups)) {
-          var cLeaves = circClusterGroups[cid];
-          var mrca = findMRCACirc(cLeaves);
+        for (var circGroup of Object.values(circClusterGroups)) {
+          var cid = circGroup.cid;
+          var cLeaves = circGroup.leaves;
+          var mrca = findMRCA(cLeaves);
           if (!mrca) continue;
           var leafAngles = cLeaves
             .map(function (d) {
@@ -636,9 +600,9 @@ export function drawTree() {
           if (innerR < 0) innerR = 0;
 
           var isOutlierWedge = Number(cid) < 0;
-          var wedgeColor = isOutlierWedge
+          var wedgeColour = isOutlierWedge
             ? tc.internal
-            : clusterColor(cid) || tc.internal;
+            : clusterColour(cid) || tc.internal;
           var wedgeArc = d3
             .arc()
             .innerRadius(innerR * state.render.scale.width)
@@ -650,9 +614,9 @@ export function drawTree() {
           var wedge = boxesG
             .append("path")
             .attr("d", wedgeArc)
-            .attr("fill", isOutlierWedge ? "none" : wedgeColor)
+            .attr("fill", isOutlierWedge ? "none" : wedgeColour)
             .attr("opacity", hasClusterFocus(cid) ? state.render.clusters.boxAlpha : 0.02)
-            .attr("stroke", wedgeColor)
+            .attr("stroke", wedgeColour)
             .attr("stroke-width", 1.5)
             .attr(
               "stroke-opacity",
@@ -674,7 +638,7 @@ export function drawTree() {
               .attr("dy", "0.35em")
               .attr("font-size", state.render.clusters.labelFontSize + "px")
               .attr("font-weight", "600")
-              .attr("fill", wedgeColor)
+              .attr("fill", wedgeColour)
               .attr("font-style", isOutlierWedge ? "italic" : "normal")
               .attr("opacity", hasClusterFocus(cid) ? 1 : 0.25)
               .attr(
@@ -689,7 +653,7 @@ export function drawTree() {
               )
               .style("text-anchor", flip ? "end" : "start")
               .text(
-                BOX_LABEL_MAP[cid] || (isOutlierWedge ? "outlier" : "C" + cid),
+                boxLabelMap[cid] || (isOutlierWedge ? "outlier" : "C" + cid),
               );
           }
         }
@@ -703,7 +667,7 @@ export function drawTree() {
   }
 
   // ── CARTESIAN (rectangular / cladogram) ──
-  const root = state.HIER_CART;
+  const root = state.cartesianHierarchy;
   const allNodes = root.descendants().filter((d) => isNodeVisible(d));
   const allLinks = root
     .links()
@@ -728,30 +692,18 @@ export function drawTree() {
     .attr("stroke", linkStroke)
     .attr("stroke-opacity", linkOpacity)
     .attr("stroke-width", state.render.branches.width)
-    .attr("d", function (d) {
-      if (layoutMode === "rectangular" || layoutMode === "cladogram") {
-        return (
-          "M" +
-          d.source._y * state.render.scale.width +
-          "," +
-          d.source._x * state.render.scale.height +
-          "V" +
-          d.target._x * state.render.scale.height +
-          "H" +
-          d.target._y * state.render.scale.width
-        );
-      }
-      return (
+    .attr(
+      "d",
+      (d) =>
         "M" +
         d.source._y * state.render.scale.width +
         "," +
         d.source._x * state.render.scale.height +
-        "L" +
-        d.target._y * state.render.scale.width +
-        "," +
-        d.target._x * state.render.scale.height
-      );
-    });
+        "V" +
+        d.target._x * state.render.scale.height +
+        "H" +
+        d.target._y * state.render.scale.width,
+    );
 
   const node = g
     .append("g")
@@ -771,14 +723,14 @@ export function drawTree() {
 
   node
     .append("circle")
-    .attr("r", (d) => isCollapsedInternal(d) ? 0 : nodeRadius(d))
+    .attr("r", (d) => isCollapsedInternal(d) ? 0 : customNodeRadius(d))
     .attr("fill", nodeFill)
-    .attr("stroke", (d) => (isHighlighted(d) ? highlightColor() : "none"))
+    .attr("stroke", (d) => (isHighlighted(d) ? HIGHLIGHT_COLOR : "none"))
     .attr("stroke-width", (d) => (isHighlighted(d) ? 2.5 : 0))
     .attr("opacity", (d) => (clusterVisible(d) ? 1 : 0.22))
     .style("cursor", "pointer")
     .on("click", function (event, d) {
-      if (!canCollapse(d)) return;
+      if (!hasOriginalChildren(d)) return;
       toggleNodeCollapsedState(d.data);
       drawTree();
     })
@@ -817,10 +769,10 @@ export function drawTree() {
     .filter((d) => !(d.children && d.children.length))
     .append("text")
     .attr("dy", 3)
-    .attr("x", (d) => nodeRadius(d) + LABEL_PAD)
+    .attr("x", (d) => customNodeRadius(d) + LABEL_PAD)
     .style("text-anchor", "start")
     .style("font-size", state.render.labels.fontSize + "px")
-    .attr("fill", (d) => (isHighlighted(d) ? highlightColor() : tc.label))
+    .attr("fill", (d) => (isHighlighted(d) ? HIGHLIGHT_COLOR : tc.label))
     .attr("font-weight", (d) => (isHighlighted(d) ? "bold" : "normal"))
     .attr("opacity", (d) => (clusterVisible(d) ? 1 : 0.3))
     .text((d) => (state.render.labels.show ? nodeDisplayName(d.data) : ""));
@@ -829,18 +781,18 @@ export function drawTree() {
   node
     .filter((d) => !!(d.children && d.children.length) && !isCollapsedInternal(d))
     .append("text")
-    .attr("dy", (d) => nodeRadius(d) + 12)
-    .attr("x", (d) => nodeRadius(d) + 3)
+    .attr("dy", (d) => customNodeRadius(d) + 12)
+    .attr("x", (d) => customNodeRadius(d) + 3)
     .style("text-anchor", "start")
     .style("font-size", state.render.labels.fontSize - 1 + "px")
     .style("font-style", "italic")
-    .attr("fill", (d) => (isHighlighted(d) ? highlightColor() : tc.internal))
+    .attr("fill", (d) => (isHighlighted(d) ? HIGHLIGHT_COLOR : tc.internal))
     .attr("font-weight", (d) => (isHighlighted(d) ? "bold" : "normal"))
     .attr("opacity", (d) => (clusterVisible(d) ? 1 : 0.3))
     .text((d) => (state.render.labels.internalShow ? nodeDisplayName(d.data) : ""));
 
   // Cluster side bars
-  if (colorMode === "bars") {
+  if (colourMode === "bars") {
     const leafNodes = allNodes
       .filter((d) => isVisibleLeaf(d))
       .sort((a, b) => (a._x || 0) - (b._x || 0));
@@ -851,93 +803,55 @@ export function drawTree() {
     if (leafNodes.length === 1) {
       const cid = nodeClusterId(leafNodes[0]);
       if (cid != null) {
-        var barColor = clusterColor(cid) || tc.internal;
+        var barColour = clusterColour(cid) || tc.internal;
         var barRect = g
           .append("rect")
           .attr("x", barX)
           .attr("y", ys[0] - 6)
           .attr("width", barW)
           .attr("height", 12)
-          .attr("fill", Number(cid) < 0 ? "none" : barColor)
-          .attr("stroke", Number(cid) < 0 ? barColor : "none")
+          .attr("fill", Number(cid) < 0 ? "none" : barColour)
+          .attr("stroke", Number(cid) < 0 ? barColour : "none")
           .attr("stroke-width", Number(cid) < 0 ? 1.5 : 0)
           .attr("opacity", 0.75);
         if (Number(cid) < 0) barRect.attr("stroke-dasharray", "4,2");
       }
     } else if (leafNodes.length > 1) {
-      const boundaries = new Array(leafNodes.length + 1);
-      for (let i = 1; i < leafNodes.length; i++)
-        boundaries[i] = (ys[i - 1] + ys[i]) / 2;
-      boundaries[0] = ys[0] - (boundaries[1] - ys[0]);
-      boundaries[leafNodes.length] =
-        ys[leafNodes.length - 1] +
-        (ys[leafNodes.length - 1] - boundaries[leafNodes.length - 1]);
-
+      const boundaries = midpointBoundaries(ys);
       const barsG = g.append("g").attr("class", "cluster-bars");
-      function leafCid(i) {
-        return nodeClusterId(leafNodes[i]);
-      }
-
-      let runStart = 0,
-        runCid = leafCid(0);
-      for (let i = 1; i <= leafNodes.length; i++) {
-        const cid = i < leafNodes.length ? leafCid(i) : Symbol("END");
-        if (cid !== runCid) {
-          if (runCid != null) {
-            const y0 = boundaries[runStart],
-              y1 = boundaries[i];
-            var bColor = clusterColor(runCid) || tc.internal;
-            var isOutlierBar = Number(runCid) < 0;
-            var barEl = barsG
-              .append("rect")
-              .attr("x", barX)
-              .attr("y", y0)
-              .attr("width", barW)
-              .attr("height", Math.max(1, y1 - y0))
-              .attr("fill", isOutlierBar ? "none" : bColor)
-              .attr("stroke", isOutlierBar ? bColor : "none")
-              .attr("stroke-width", isOutlierBar ? 1.5 : 0)
-              .attr("opacity", hasClusterFocus(runCid) ? 0.75 : 0.18);
-            if (isOutlierBar) barEl.attr("stroke-dasharray", "4,2");
-          }
-          runStart = i;
-          runCid = i < leafNodes.length ? cid : null;
-        }
+      for (const run of clusterRuns(leafNodes.length, (i) => nodeClusterId(leafNodes[i]))) {
+        const y0 = boundaries[run.start],
+          y1 = boundaries[run.end];
+        var runColour = clusterColour(run.cid) || tc.internal;
+        var isOutlierBar = Number(run.cid) < 0;
+        var barEl = barsG
+          .append("rect")
+          .attr("x", barX)
+          .attr("y", y0)
+          .attr("width", barW)
+          .attr("height", Math.max(1, y1 - y0))
+          .attr("fill", isOutlierBar ? "none" : runColour)
+          .attr("stroke", isOutlierBar ? runColour : "none")
+          .attr("stroke-width", isOutlierBar ? 1.5 : 0)
+          .attr("opacity", hasClusterFocus(run.cid) ? 0.75 : 0.18);
+        if (isOutlierBar) barEl.attr("stroke-dasharray", "4,2");
       }
       barsG.attr("pointer-events", "none");
     }
   }
 
   // Cluster boxes (MRCA mode)
-  if (colorMode === "boxes" && state.CURRENT_CLUSTERS && state.CLUSTER_COLORS.length) {
+  if (colourMode === "boxes" && state.currentClusters && state.clusterColours.length) {
     const clusterGroups = {};
     allNodes.forEach((d) => {
       if (!isVisibleLeaf(d)) return;
       const cid = nodeClusterId(d);
       if (cid == null) return;
       if (!state.render.clusters.showOutlierBoxes && Number(cid) < 0) return;
-      if (!clusterGroups[cid]) clusterGroups[cid] = [];
-      clusterGroups[cid].push(d);
+      const key = boxGroupKey(d, cid);
+      if (!clusterGroups[key]) clusterGroups[key] = { cid, leaves: [] };
+      clusterGroups[key].leaves.push(d);
     });
-    function findMRCA(nodes) {
-      if (!nodes.length) return null;
-      if (nodes.length === 1) return nodes[0];
-      function ancestors(n) {
-        const a = [];
-        let cur = n;
-        while (cur) {
-          a.push(cur);
-          cur = cur.parent;
-        }
-        return a;
-      }
-      let common = ancestors(nodes[0]);
-      for (let i = 1; i < nodes.length; i++) {
-        const anc = new Set(ancestors(nodes[i]));
-        common = common.filter((n) => anc.has(n));
-      }
-      return common[0];
-    }
     var estLabelPx = state.render.labels.show
       ? maxLabelChars * state.render.labels.fontSize * 0.6 +
         LABEL_PAD +
@@ -947,8 +861,9 @@ export function drawTree() {
     var boxPadV = state.render.clusters.boxPadV;
     var boxPadL = state.render.clusters.boxPadH;
     var boxesG = g.append("g").attr("class", "cluster-boxes");
-    for (var cid of Object.keys(clusterGroups)) {
-      var leaves = clusterGroups[cid];
+    for (var group of Object.values(clusterGroups)) {
+      var cid = group.cid;
+      var leaves = group.leaves;
       var mrca = findMRCA(leaves);
       if (!mrca) continue;
       var ys = leaves.map(function (d) {
@@ -971,9 +886,9 @@ export function drawTree() {
       boxRight += adj.dx + adj.padX;
       var boxW = boxRight - mrcaX;
       var isOutlier = Number(cid) < 0;
-      var color = isOutlier
+      var colour = isOutlier
         ? tc.internal
-        : state.CLUSTER_COLORS[cid % state.CLUSTER_COLORS.length];
+        : state.clusterColours[cid % state.clusterColours.length];
       var rect = boxesG
         .append("rect")
         .attr("x", mrcaX)
@@ -982,10 +897,10 @@ export function drawTree() {
         .attr("height", Math.max(maxY - minY, 4))
         .attr("rx", state.render.clusters.boxCornerRadius)
         .attr("ry", state.render.clusters.boxCornerRadius)
-        .attr("fill", isOutlier ? "none" : color)
+        .attr("fill", isOutlier ? "none" : colour)
         .attr("opacity", hasClusterFocus(cid) ? state.render.clusters.boxAlpha : 0.02)
-        .attr("stroke", color)
-        .attr("stroke-width", isOutlier ? 1.5 : 1.5)
+        .attr("stroke", colour)
+        .attr("stroke-width", 1.5)
         .attr(
           "stroke-opacity",
           hasClusterFocus(cid) ? Math.min(state.render.clusters.boxAlpha * 3.5, 0.8) : 0.08,
@@ -1001,10 +916,10 @@ export function drawTree() {
           .attr("dy", "0.35em")
           .attr("font-size", state.render.clusters.labelFontSize + "px")
           .attr("font-weight", "600")
-          .attr("fill", color)
+          .attr("fill", colour)
           .attr("font-style", isOutlier ? "italic" : "normal")
           .attr("opacity", hasClusterFocus(cid) ? 1 : 0.25)
-          .text(BOX_LABEL_MAP[cid] || (isOutlier ? "outlier" : "C" + cid));
+          .text(boxLabelMap[cid] || (isOutlier ? "outlier" : "C" + cid));
       }
     }
     boxesG.attr("pointer-events", "none");
@@ -1049,21 +964,16 @@ export function drawTree() {
   applyTreeZoomBounds(svg, zoom, zoomLayer, previousTransform);
 }
 
-/* ─────────────────────────────────────
-   Fit tree to viewport
-   ───────────────────────────────────── */
-export function fitTree() {
-  const svg = state.LAST_TREE_SVG;
-  const zoom = state.LAST_TREE_ZOOM;
-  const layer = state.LAST_ZOOM_LAYER;
-  if (!svg || !zoom || !layer) return;
+/** Zoom `svg` so the content of `layer` fills the viewport, leaving `insetRight` pixels free on the right; returns the transform applied, or null. */
+export function fitToViewport(svg, zoom, layer, insetRight = 0) {
+  if (!svg || !zoom || !layer) return null;
 
   let bbox;
-  try { bbox = layer.node().getBBox(); } catch { return; }
-  if (!bbox || !isFinite(bbox.width) || bbox.width <= 0 || bbox.height <= 0) return;
+  try { bbox = layer.node().getBBox(); } catch { return null; }
+  if (!bbox || !isFinite(bbox.width) || bbox.width <= 0 || bbox.height <= 0) return null;
 
   const svgNode = svg.node();
-  const vw = (svgNode && svgNode.clientWidth) || 800;
+  const vw = ((svgNode && svgNode.clientWidth) || 800) - insetRight;
   const vh = (svgNode && svgNode.clientHeight) || 600;
   const pad = 28;
 
@@ -1076,11 +986,13 @@ export function fitTree() {
   const ty = pad + (vh - pad * 2 - bbox.height * scale) / 2 - bbox.y * scale;
 
   const t = d3.zoomIdentity.translate(tx, ty).scale(scale);
-  state.LAST_TREE_TRANSFORM = t;
   svg.transition().duration(280).call(zoom.transform, t);
+  return t;
 }
 
-/* ─────────────────────────────────────
-   Draw tree into a specific container
-   (used for comparison mode)
-   ───────────────────────────────────── */
+export function fitTree() {
+  const layout = state.render.layout || "rectangular";
+  const inset = layout === "circular" ? 0 : scorePanelReserve();
+  const t = fitToViewport(state.lastTreeSvg, state.lastTreeZoom, state.lastZoomLayer, inset);
+  if (t) state.lastTreeTransform = t;
+}

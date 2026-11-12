@@ -21,6 +21,11 @@
 .footer-logo:hover {
   opacity: 1;
 }
+[data-theme="dark"] .footer-logo {
+  background: rgba(255, 255, 255, 0.9);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
 .footer-sep {
   width: 1px;
   height: 14px;
@@ -49,67 +54,6 @@
 }
 .footer-gh svg {
   flex-shrink: 0;
-}
-
-/* ===================== COPY DROPDOWN ===================== */
-.copy-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  min-width: 160px;
-  background: var(--pc-surface);
-  border: 1px solid var(--pc-border);
-  border-radius: var(--pc-radius-md);
-  box-shadow: var(--pc-shadow-lg);
-  padding: 4px;
-  z-index: 4000;
-}
-.copy-dropdown.show {
-  display: block !important;
-  animation: fadeInUp 0.15s ease;
-}
-.copy-dropdown-title {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--pc-text-muted);
-  padding: 4px 12px 2px;
-  user-select: none;
-}
-.copy-dropdown .dropdown-item {
-  display: block;
-  width: 100%;
-  padding: 6px 12px;
-  border: none;
-  background: none;
-  text-align: left;
-  font-size: 13px;
-  color: var(--pc-text-secondary);
-  border-radius: var(--pc-radius-sm);
-  cursor: pointer;
-  transition: all var(--pc-transition);
-}
-.copy-dropdown .dropdown-item:hover {
-  background: var(--pc-accent-subtle);
-  color: var(--pc-accent);
-}
-.copy-dropdown-quality {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 11px;
-  color: var(--pc-text-muted);
-  border-top: 1px solid var(--pc-border-subtle);
-  margin-top: 4px;
-}
-.copy-dropdown-quality input {
-  border: 1px solid var(--pc-border);
-  border-radius: 4px;
-  padding: 0 6px;
-  background: var(--pc-bg);
-  color: var(--pc-text);
 }
 
 /* ===================== ACTIVITY LOG BUTTON + PANEL ===================== */
@@ -216,6 +160,7 @@
 .log-entry-info .log-msg { color: var(--pc-text-secondary); }
 .log-entry-success .log-msg { color: var(--pc-accent); }
 .log-entry-danger .log-msg { color: var(--pc-danger); }
+.log-entry-warning .log-msg { color: var(--pc-warning); }
 .log-entry-empty {
   padding: 16px 12px;
   color: var(--pc-text-muted);

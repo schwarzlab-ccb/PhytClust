@@ -1,9 +1,4 @@
-/* ============================================================
-   PhytClust – ui/appearance_panel.js
-   A single declarative panel for all visual options.
-   Reads/writes state.render via setRenderOption + getRenderOption,
-   triggers a redraw on every change.
-   ============================================================ */
+// Build and update the appearance controls.
 
 import { state, setRenderOption, getRenderOption } from "../state.js";
 
@@ -27,7 +22,7 @@ const APPEARANCE_SPEC = [
     section: "Branches",
     controls: [
       { kind: "number", path: "branches.width", label: "Branch width", min: 0.5, max: 6, step: 0.1 },
-      { kind: "color", path: "branches.color", label: "Branch color", nullable: true },
+      { kind: "color", path: "branches.color", label: "Branch colour", nullable: true },
       { kind: "checkbox", path: "branches.colorByClusters", label: "Colour by cluster" },
     ],
   },
@@ -211,9 +206,7 @@ export function wireAppearanceTrigger({ buttonId, panelId, onChange }) {
     setExpanded(false);
   };
   const open = () => {
-    // Re-mount on every open so the controls reflect any external state
-    // changes (e.g. Reset View, presets, programmatic toggles) since the
-    // panel was last shown.
+    // Rebuild on open so the controls reflect state changed elsewhere.
     mountAppearancePanel(panel, onChange);
     panel.classList.add("open");
     setExpanded(true);

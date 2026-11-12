@@ -1,23 +1,22 @@
-/* PhytClust – tree/nodes.js
-   Per-node metadata (custom overrides, display name, radius, cluster
+/* Per-node metadata (custom overrides, display name, radius, cluster
    identity) and the node context menu. */
 
-import { state, NODE_CUSTOM } from "../state.js";
+import { state, nodeCustom } from "../state.js";
 import { collectLeafNamesData } from "../utils.js";
 
 export function getNodeCustom(dataNode) {
-  if (!NODE_CUSTOM.has(dataNode))
-    NODE_CUSTOM.set(dataNode, {
+  if (!nodeCustom.has(dataNode))
+    nodeCustom.set(dataNode, {
       highlighted: false,
       radiusScale: 1,
       renamedTo: null,
       lockOriginalSize: false,
     });
-  return NODE_CUSTOM.get(dataNode);
+  return nodeCustom.get(dataNode);
 }
 
 export function nodeDisplayName(dataNode) {
-  const c = NODE_CUSTOM.has(dataNode) ? NODE_CUSTOM.get(dataNode) : null;
+  const c = nodeCustom.has(dataNode) ? nodeCustom.get(dataNode) : null;
   return c && c.renamedTo != null ? c.renamedTo : dataNode.name || "";
 }
 
@@ -36,7 +35,7 @@ export function customNodeRadius(d) {
     d.data && d.data.children && d.data.children.length
       ? state.render.nodes.internalRadius
       : state.render.nodes.leafRadius;
-  const c = NODE_CUSTOM.has(d.data) ? NODE_CUSTOM.get(d.data) : null;
+  const c = nodeCustom.has(d.data) ? nodeCustom.get(d.data) : null;
 
   if (c && c.lockOriginalSize) {
     return base;
@@ -60,13 +59,13 @@ export function customNodeRadius(d) {
 }
 
 export function representativeClusterIdFromData(dataNode) {
-  if (!dataNode || !state.CURRENT_CLUSTERS) return null;
+  if (!dataNode || !state.currentClusters) return null;
   const leaves = [];
   collectLeafNamesData(dataNode, leaves);
   if (!leaves.length) return null;
   let cid = null;
   for (const nm of leaves) {
-    const v = state.CURRENT_CLUSTERS[nm];
+    const v = state.currentClusters[nm];
     if (v == null) return null;
     if (cid == null) cid = v;
     else if (cid !== v) return null;
@@ -77,7 +76,7 @@ export function representativeClusterIdFromData(dataNode) {
 export function showNodeContextMenu(event, d) {
   event.preventDefault();
   event.stopPropagation();
-  state.CTX_TARGET_DATA = d.data;
+  state.contextTargetData = d.data;
   const menu = document.getElementById("node-context-menu");
   if (!menu) return;
   menu.style.display = "block";
@@ -85,15 +84,13 @@ export function showNodeContextMenu(event, d) {
   menu.style.top = event.clientY + "px";
   var ctxSlider = document.getElementById("ctx-size-slider");
   var ctxSliderVal = document.getElementById("ctx-size-value");
-  var c = NODE_CUSTOM.has(d.data)
-    ? NODE_CUSTOM.get(d.data)
-    : { radiusScale: 1 };
+  var c = getNodeCustom(d.data);
   if (ctxSlider) ctxSlider.value = c.radiusScale;
   if (ctxSliderVal) ctxSliderVal.textContent = c.radiusScale.toFixed(1);
 
   var isLeaf = !(d.data.children && d.data.children.length);
   var hasClusters =
-    state.CURRENT_CLUSTERS && Object.keys(state.CURRENT_CLUSTERS).length > 0;
+    state.currentClusters && Object.keys(state.currentClusters).length > 0;
   var isBoxMode = state.render.clusters.colorMode === "boxes";
 
   var copyBtn = document.getElementById("ctx-copy-subtree");
@@ -101,7 +98,6 @@ export function showNodeContextMenu(event, d) {
   var clusterBtn = document.getElementById("ctx-select-cluster");
   var renameClusterBtn = document.getElementById("ctx-rename-cluster");
   var adjustBoxBtn = document.getElementById("ctx-adjust-box");
-  var c = getNodeCustom(d.data);
 
   if (copyBtn) copyBtn.style.display = isLeaf ? "none" : "";
   if (originalSizeBtn) {
@@ -120,14 +116,11 @@ export function showNodeContextMenu(event, d) {
 export function hideNodeContextMenu() {
   const menu = document.getElementById("node-context-menu");
   if (menu) menu.style.display = "none";
-  state.CTX_TARGET_DATA = null;
+  state.contextTargetData = null;
 }
 
-/* ─────────────────────────────────────
-   Search highlighting helper
-   ───────────────────────────────────── */
 export function isSearchMatch(dataNode) {
-  if (!state.SEARCH_TERM) return false;
+  if (!state.searchTerm) return false;
   const name = nodeDisplayName(dataNode).toLowerCase();
-  return name.includes(state.SEARCH_TERM.toLowerCase());
+  return name.includes(state.searchTerm.toLowerCase());
 }

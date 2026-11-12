@@ -8,43 +8,43 @@ const NEWICK_EMBED_LIMIT_KB = 500;
 // Form controls included in session files.
 const PARAM_FIELDS = [
   // mode-specific
-  { path: "params.k", id: "extra-k", type: "int" },
-  { path: "params.top_n", id: "extra-topn", type: "int" },
-  { path: "params.num_bins", id: "extra-bins", type: "int" },
+  { path: "params.k", id: "k", type: "int" },
+  { path: "params.top_n", id: "top-n", type: "int" },
+  { path: "params.num_bins", id: "bins", type: "int" },
 
   // rooting
-  { path: "params.outgroup", id: "extra-outgroup", type: "text" },
-  { path: "params.root_taxon", id: "extra-root-taxon", type: "text" },
+  { path: "params.outgroup", id: "outgroup", type: "text" },
+  { path: "params.root_taxon", id: "root-taxon", type: "text" },
 
   // bounds
-  { path: "params.max_k", id: "extra-maxk", type: "int" },
-  { path: "params.max_k_limit", id: "extra-maxklimit", type: "float" },
-  { path: "params.min_cluster_size", id: "extra-min-cluster-size", type: "int" },
+  { path: "params.max_k", id: "max-k", type: "int" },
+  { path: "params.max_k_limit", id: "max-k-limit", type: "float" },
+  { path: "params.min_cluster_size", id: "min-cluster-size", type: "int" },
 
   // outlier
-  { path: "params.outlier.enabled", id: "extra-outlier", type: "checkbox" },
-  { path: "params.outlier.size_threshold", id: "extra-outlier-threshold", type: "int" },
-  { path: "params.outlier.prefer_fewer", id: "extra-outlier-prefer-fewer", type: "checkbox" },
-  { path: "params.outlier.ratio_mode", id: "extra-outlier-ratio-mode", type: "select" },
+  { path: "params.outlier.enabled", id: "mark-outliers", type: "checkbox" },
+  { path: "params.outlier.size_threshold", id: "outlier-threshold", type: "int" },
+  { path: "params.outlier.prefer_fewer", id: "outlier-prefer-fewer", type: "checkbox" },
+  { path: "params.outlier.ratio_mode", id: "outlier-ratio-mode", type: "select" },
 
   // peak
-  { path: "params.peak.prominence_weight", id: "extra-prominence-weight", type: "float" },
-  { path: "params.peak.ranking_mode", id: "extra-ranking-mode", type: "select" },
-  { path: "params.peak.min_prominence", id: "extra-min-prominence", type: "float" },
-  { path: "params.peak.relative_prominence", id: "extra-relative-prom", type: "checkbox" },
-  { path: "params.peak.exclude_k2", id: "extra-exclude-k2", type: "checkbox" },
+  { path: "params.peak.prominence_weight", id: "prominence-weight", type: "float" },
+  { path: "params.peak.ranking_mode", id: "ranking-mode", type: "select" },
+  { path: "params.peak.min_prominence", id: "min-prominence", type: "float" },
+  { path: "params.peak.relative_prominence", id: "relative-prominence", type: "checkbox" },
+  { path: "params.peak.exclude_k2", id: "exclude-k2", type: "checkbox" },
 
   // polytomy
-  { path: "params.polytomy.mode", id: "extra-polytomy-mode", type: "select" },
-  { path: "params.polytomy.no_split_zero", id: "extra-no-split-zero", type: "checkbox" },
+  { path: "params.polytomy.mode", id: "polytomy-mode", type: "select" },
+  { path: "params.polytomy.no_split_zero", id: "no-split-zero", type: "checkbox" },
 
   // branch support
-  { path: "params.support.use", id: "extra-use-support", type: "checkbox" },
-  { path: "params.support.min_support", id: "extra-min-support", type: "float" },
-  { path: "params.support.support_weight", id: "extra-support-weight", type: "float" },
+  { path: "params.support.use", id: "use-support", type: "checkbox" },
+  { path: "params.support.min_support", id: "min-support", type: "float" },
+  { path: "params.support.support_weight", id: "support-weight", type: "float" },
 
   // advanced
-  { path: "params.compute_all_clusters", id: "extra-compute-all", type: "checkbox" },
+  { path: "params.compute_all_clusters", id: "compute-all", type: "checkbox" },
 ];
 
 function getPath(object, path) {
@@ -150,16 +150,16 @@ export function collectSession({ includeNewick = true } = {}) {
   }
 
   const selector = document.getElementById("cluster-select");
-  const result = state.latestApiData;
-  if (selector && result) {
-    const counts = state.CLUSTER_VIEW_MODE === "all" ? result.all_ks : result.k_values || result.ks;
+  const result = state.lastRunData;
+  if (state.pendingSessionView) {
+    session.view = { ...state.pendingSessionView };
+  } else if (selector && result) {
+    const counts = state.clusterViewMode === "all" ? result.all_ks : result.k_values || result.ks;
     const selectedCount = counts?.[Number(selector.value)];
     if (Number.isSafeInteger(selectedCount) && selectedCount > 0) {
       session.view.selected_k = selectedCount;
-      session.view.cluster_mode = state.CLUSTER_VIEW_MODE;
+      session.view.cluster_mode = state.clusterViewMode;
     }
-  } else if (state.pendingSessionView) {
-    session.view = { ...state.pendingSessionView };
   }
 
   return session;
@@ -187,12 +187,13 @@ export function applySession(session) {
   const errors = [];
   if (!isObject(session) || !Number.isSafeInteger(session.version) ||
       session.version < 1 || !isObject(session.params)) {
-    return { applied: 0, errors: ["Expected a session object with a version and parameters."], hadNewick: false };
+    return { valid: false, applied: 0, errors: ["Expected a session object with a version and parameters."], hadNewick: false };
   }
   if (session.version > SESSION_VERSION) {
     errors.push(`Session version ${session.version} is newer than this application. Some settings may be skipped.`);
   }
   let applied = 0;
+  let appearanceChanged = false;
   if (session.params.mode !== undefined) {
     if (writeMode(session.params.mode)) applied++;
     else errors.push("Unknown clustering mode in session.");
@@ -210,6 +211,12 @@ export function applySession(session) {
     try {
       validateAppearance(session.appearance, state.render);
       state.render = renderOptionsWithOverrides(session.appearance);
+      appearanceChanged = true;
+      for (const [id, value] of [["layout-mode", state.render.layout],
+                                 ["colour-mode", state.render.clusters.colorMode]]) {
+        const control = document.getElementById(id);
+        if (control) control.value = value;
+      }
       applied++;
     } catch (error) {
       errors.push(`Appearance settings were skipped: ${error.message}`);
@@ -237,7 +244,30 @@ export function applySession(session) {
   } else if (session.newick !== undefined && typeof session.newick !== "string") {
     errors.push("The saved tree must be Newick text.");
   }
-  return { applied, errors, hadNewick };
+  if (appearanceChanged) {
+    document.dispatchEvent(new Event("phytclust:appearance-restored"));
+  }
+  return { valid: true, applied, errors, hadNewick };
+}
+
+const HEX_COLOUR = /^#[0-9a-fA-F]{6}$/;
+
+const APPEARANCE_ENUMS = {
+  layout: ["rectangular", "cladogram", "circular"],
+  "clusters.colorMode": ["bars", "boxes", "nodes"],
+};
+
+// Settings whose value is a colour string, or null for the theme colour.
+const APPEARANCE_COLOURS = new Set(["branches.color"]);
+
+function appearanceValueIsValid(path, value) {
+  const allowed = APPEARANCE_ENUMS[path];
+  if (allowed) return allowed.includes(value);
+  if (APPEARANCE_COLOURS.has(path)) {
+    return value === null || (typeof value === "string" && HEX_COLOUR.test(value));
+  }
+  if (typeof value === "boolean") return true;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function validateAppearance(changes, settings, parentPath = "") {
@@ -246,13 +276,9 @@ function validateAppearance(changes, settings, parentPath = "") {
     const path = parentPath ? `${parentPath}.${name}` : name;
     if (!Object.hasOwn(settings, name)) throw new Error(`Unknown display setting: ${path}`);
     const current = settings[name];
-    if (isObject(current)) validateAppearance(value, current, path);
-    else if (current === null ? value !== null && typeof value !== "string" :
-      typeof value !== typeof current ||
-      (typeof value === "number" && (!Number.isFinite(value) || value < 0)) ||
-      (typeof value === "string" && !(
-        path === "layout" ? ["rectangular", "cladogram", "circular"] : ["bars", "boxes"]
-      ).includes(value))) {
+    if (isObject(current)) {
+      validateAppearance(value, current, path);
+    } else if (!appearanceValueIsValid(path, value)) {
       throw new Error(`Invalid display setting: ${path}`);
     }
   }
@@ -264,14 +290,4 @@ export function sessionSizeWarning(session) {
   return kb > NEWICK_EMBED_LIMIT_KB
     ? `Embedded Newick is ${kb.toFixed(0)} KB. Consider saving without the tree.`
     : null;
-}
-
-export function isSessionJson(text) {
-  try {
-    const parsed = JSON.parse(text);
-    return isObject(parsed) && Number.isSafeInteger(parsed.version) &&
-      parsed.version >= 1 && isObject(parsed.params);
-  } catch {
-    return false;
-  }
 }

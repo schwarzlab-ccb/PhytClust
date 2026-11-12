@@ -1,7 +1,4 @@
-/* ============================================================
-   PhytClust – ui/toast.js
-   Toast notification system.
-   ============================================================ */
+// Show temporary notifications.
 
 export function showToast(message, type, duration) {
   type = type || "info";

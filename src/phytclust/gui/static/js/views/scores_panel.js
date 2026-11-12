@@ -1,13 +1,11 @@
-/* ============================================================
-   PhytClust – views/scores_panel.js
-   Mini scores panel (overlay on tree page) + switchToK.
-   ============================================================ */
+// Mini scores panel (overlay on tree page) + switchToK.
 
 import { state } from "../state.js";
 import { d3Tooltip } from "../dom.js";
-import { getThemeColors, BASE_COLORS, withAlpha } from "../colors.js";
+import { getThemeColours } from "../colors.js";
 import { showToast } from "../ui/toast.js";
 import { populateClusterSelector, switchCluster } from "./cluster_editor.js";
+import { scoreDataPoints, hasBinRanges, drawBinBands } from "./scores.js";
 
 export function drawMiniScores(data) {
   var panel = document.getElementById("mini-scores-panel");
@@ -23,11 +21,9 @@ export function drawMiniScores(data) {
 
   panel.classList.add("visible");
   plotEl.innerHTML = "";
-  var tc = getThemeColors();
+  var tc = getThemeColours();
 
-  var dataPoints = [];
-  for (var i = 0; i < scores.length - 1; i++)
-    dataPoints.push({ k: i + 2, score: scores[i + 1] });
+  var dataPoints = scoreDataPoints(scores);
   if (!dataPoints.length) return;
 
   var width = 252,
@@ -60,40 +56,17 @@ export function drawMiniScores(data) {
     .range([innerH, 0]);
 
   // Resolution-mode bin bands
-  if (
-    data &&
-    data.mode === "resolution" &&
-    Array.isArray(data.bin_ranges) &&
-    data.bin_ranges.length > 0
-  ) {
+  if (hasBinRanges(data)) {
     var ks = dataPoints.map((d) => d.k);
-    var kMin = ks[0];
-    var kMax = ks[ks.length - 1];
-    data.bin_ranges.forEach(function (range, i) {
-      var lo = Math.max(kMin, range[0]);
-      var hi = Math.min(kMax, range[1]);
-      if (hi <= lo) return;
-      var x0 = xScale(lo);
-      var x1 = xScale(hi);
-      var colour = BASE_COLORS[i % BASE_COLORS.length];
-      g.append("rect")
-        .attr("x", Math.min(x0, x1))
-        .attr("y", 0)
-        .attr("width", Math.abs(x1 - x0))
-        .attr("height", innerH)
-        .attr("fill", withAlpha(colour, 0.1))
-        .attr("stroke", "none");
-      if (i < data.bin_ranges.length - 1) {
-        g.append("line")
-          .attr("x1", x1)
-          .attr("x2", x1)
-          .attr("y1", 0)
-          .attr("y2", innerH)
-          .attr("stroke", tc.muted)
-          .attr("stroke-width", 1)
-          .attr("stroke-dasharray", "2,2")
-          .attr("opacity", 0.7);
-      }
+    drawBinBands(g, data.bin_ranges, {
+      kMin: ks[0],
+      kMax: ks[ks.length - 1],
+      xLeft: xScale,
+      xRight: xScale,
+      innerWidth: innerW,
+      innerHeight: innerH,
+      dash: "2,2",
+      strokeColour: tc.muted,
     });
   }
 
@@ -156,13 +129,13 @@ export function drawMiniScores(data) {
 }
 
 export function switchToK(k) {
-  if (!state.latestApiData) return;
-  if (state.latestApiData.all_clusters && state.latestApiData.all_ks) {
-    var idx = state.latestApiData.all_ks.indexOf(k);
+  if (!state.lastRunData) return;
+  if (state.lastRunData.all_clusters && state.lastRunData.all_ks) {
+    var idx = state.lastRunData.all_ks.indexOf(k);
     if (idx >= 0) {
-      if (state.CLUSTER_VIEW_MODE !== "all") {
-        state.CLUSTER_VIEW_MODE = "all";
-        populateClusterSelector(state.latestApiData);
+      if (state.clusterViewMode !== "all") {
+        state.clusterViewMode = "all";
+        populateClusterSelector(state.lastRunData);
         var toggleEl = document.getElementById("cluster-view-toggle");
         if (toggleEl) toggleEl.textContent = "Show peaks only";
       }
@@ -172,13 +145,13 @@ export function switchToK(k) {
       return;
     }
   }
-  var peakKs = state.latestApiData.k_values || state.latestApiData.ks;
-  if (peakKs && state.latestApiData.clusters) {
+  var peakKs = state.lastRunData.k_values || state.lastRunData.ks;
+  if (peakKs && state.lastRunData.clusters) {
     var idx2 = peakKs.indexOf(k);
     if (idx2 >= 0) {
-      if (state.CLUSTER_VIEW_MODE !== "peaks") {
-        state.CLUSTER_VIEW_MODE = "peaks";
-        populateClusterSelector(state.latestApiData);
+      if (state.clusterViewMode !== "peaks") {
+        state.clusterViewMode = "peaks";
+        populateClusterSelector(state.lastRunData);
         var toggleEl2 = document.getElementById("cluster-view-toggle");
         if (toggleEl2) toggleEl2.textContent = "Show all k";
       }
@@ -189,7 +162,7 @@ export function switchToK(k) {
     }
   }
   showToast(
-    "k=" + k + " not cached. Enable 'Compute all clusters' to access any k.",
+    "k=" + k + " not cached. Enable 'Compute all k' to access any k.",
     "info",
     3000,
   );

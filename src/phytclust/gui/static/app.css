@@ -1,10 +1,5 @@
-/* ============================================================
-   PhytClust – Modern Design System
-   ============================================================
-   Light/dark theming via [data-theme] on <html>.
-   All colors use CSS custom properties so switching theme
-   swaps everything at once.
-   ============================================================ */
+/* PhytClust design system: light/dark theming via [data-theme] on <html>,
+   with every colour a CSS custom property so a theme switch swaps all at once. */
 
 @import url("css/base.css");
 @import url("css/nav.css");

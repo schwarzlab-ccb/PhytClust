@@ -4,8 +4,7 @@
 
 .appearance-panel {
   display: none;
-  /* Pinned to top-right of the viewport so any trigger button (Viewer
-     toolbar, Compare toolbar, future tabs) can open the same panel. */
+  /* Fixed position, so the Viewer and Compare toolbars share one panel. */
   position: fixed;
   top: calc(var(--pc-header-height) + 60px);
   right: 16px;

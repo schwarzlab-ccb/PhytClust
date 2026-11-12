@@ -48,14 +48,12 @@ def build_gui_parser() -> argparse.ArgumentParser:
         help="Restart the server when code changes. Browser opening is disabled.",
     )
     parser.add_argument(
-        "--public",
-        action="store_true",
-        help="Limit tree size and disable saving files on the server.",
-    )
-    parser.add_argument(
         "--no-browser", action="store_true", help="Do not open a browser automatically."
     )
     return parser
+
+
+LOOPBACK_BIND_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _browser_url(host: str, port: int) -> str:
@@ -110,9 +108,18 @@ def main(argv=None) -> int:
         )
         return 1
 
-    previous_public_mode = os.environ.get("PHYTCLUST_PUBLIC_MODE")
-    if args.public:
-        os.environ["PHYTCLUST_PUBLIC_MODE"] = "1"
+    previous_allowed_hosts = os.environ.get("PHYTCLUST_ALLOWED_HOSTS")
+    bind_host = args.host.strip("[]")
+    if bind_host not in LOOPBACK_BIND_HOSTS and previous_allowed_hosts is None:
+        # A deliberately exposed server must accept whatever hostname clients use.
+        os.environ["PHYTCLUST_ALLOWED_HOSTS"] = "*"
+        print(
+            f"WARNING: listening on {bind_host}: other machines on the network can "
+            f"run clusterings and write result files under {os.getcwd()}. The GUI "
+            "is meant to run on your own machine; omit --host to keep it local.",
+            file=sys.stderr,
+            flush=True,
+        )
     stopped = threading.Event()
     browser_thread = None
     url = _browser_url(args.host, args.port)
@@ -147,11 +154,8 @@ def main(argv=None) -> int:
         stopped.set()
         if browser_thread is not None:
             browser_thread.join(timeout=0.2)
-        if args.public:
-            if previous_public_mode is None:
-                os.environ.pop("PHYTCLUST_PUBLIC_MODE", None)
-            else:
-                os.environ["PHYTCLUST_PUBLIC_MODE"] = previous_public_mode
+        if previous_allowed_hosts is None:
+            os.environ.pop("PHYTCLUST_ALLOWED_HOSTS", None)
     return 0
 
 

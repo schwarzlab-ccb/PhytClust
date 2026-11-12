@@ -1,45 +1,44 @@
 /* Parse trees and read or reset GUI controls. */
 
-export function resetExtraParams() {
+export function resetParams() {
   [
-    "extra-k",
-    "extra-outgroup",
-    "extra-root-taxon",
-    "extra-topn",
-    "extra-bins",
-    "extra-maxk",
-    "extra-maxklimit",
-    "extra-prominence-weight",
-    "extra-min-cluster-size",
-    "extra-min-prominence",
-    "extra-outlier-threshold",
-    "extra-min-support",
-    "extra-support-weight",
+    "k",
+    "outgroup",
+    "root-taxon",
+    "top-n",
+    "bins",
+    "max-k",
+    "max-k-limit",
+    "prominence-weight",
+    "min-cluster-size",
+    "min-prominence",
+    "outlier-threshold",
+    "min-support",
+    "support-weight",
   ].forEach(function (id) {
     const element = document.getElementById(id);
     if (element) element.value = "";
   });
-  ["extra-outlier"].forEach(function (id) {
+  ["mark-outliers"].forEach(function (id) {
     const element = document.getElementById(id);
     if (element) element.checked = true;
   });
   [
-    "extra-resolution",
-    "extra-compute-all",
-    "extra-outlier-prefer-fewer",
-    "extra-no-split-zero",
-    "extra-use-support",
-    "extra-relative-prom",
-    "extra-exclude-k2",
+    "compute-all",
+    "outlier-prefer-fewer",
+    "no-split-zero",
+    "use-support",
+    "relative-prominence",
+    "exclude-k2",
   ].forEach(function (id) {
     const element = document.getElementById(id);
     if (element) element.checked = false;
   });
-  const rankingMode = document.getElementById("extra-ranking-mode");
+  const rankingMode = document.getElementById("ranking-mode");
   if (rankingMode) rankingMode.value = "adjusted";
-  const penaltyMode = document.getElementById("extra-outlier-ratio-mode");
+  const penaltyMode = document.getElementById("outlier-ratio-mode");
   if (penaltyMode) penaltyMode.value = "exp";
-  const polytomyMode = document.getElementById("extra-polytomy-mode");
+  const polytomyMode = document.getElementById("polytomy-mode");
   if (polytomyMode) polytomyMode.value = "soft";
 }
 
@@ -200,6 +199,53 @@ export function escapeHtmlAttr(value) {
     .replace(/'/g, "&#39;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/**
+  * Copy of a leaf-to-cluster map with outlier leaves set to -1: clusters
+  * smaller than `threshold`, or singletons when there is none. Negative ids
+  * are kept.
+ */
+export function markOutlierClusters(clusterMap, { enabled = true, threshold = null } = {}) {
+  const entries = Object.entries(clusterMap || {});
+  const marked = {};
+  if (!enabled) {
+    for (const [name, clusterId] of entries) marked[name] = clusterId;
+    return marked;
+  }
+  const minimumSize = Number.isSafeInteger(threshold) && threshold >= 1 ? threshold : 2;
+  const sizes = new Map();
+  for (const [, clusterId] of entries) sizes.set(clusterId, (sizes.get(clusterId) || 0) + 1);
+  for (const [name, clusterId] of entries) {
+    marked[name] = Number(clusterId) >= 0 && sizes.get(clusterId) < minimumSize ? -1 : clusterId;
+  }
+  return marked;
+}
+
+/** Boundaries halfway between neighbouring sorted positions, extended one half-step past each end. */
+export function midpointBoundaries(positions) {
+  const count = positions.length;
+  const boundaries = new Array(count + 1);
+  for (let index = 1; index < count; index++) boundaries[index] = (positions[index - 1] + positions[index]) / 2;
+  boundaries[0] = positions[0] - (boundaries[1] - positions[0]);
+  boundaries[count] = positions[count - 1] + (positions[count - 1] - boundaries[count - 1]);
+  return boundaries;
+}
+
+/** Runs of neighbouring items with the same cluster id, as {start, end, cid} with `end` exclusive; unassigned items are skipped. */
+export function clusterRuns(count, clusterIdAt) {
+  const runs = [];
+  if (!count) return runs;
+  let runStart = 0;
+  let runCid = clusterIdAt(0);
+  for (let index = 1; index <= count; index++) {
+    const cid = index < count ? clusterIdAt(index) : Symbol("END");
+    if (cid === runCid) continue;
+    if (runCid != null) runs.push({ start: runStart, end: index, cid: runCid });
+    runStart = index;
+    runCid = index < count ? cid : null;
+  }
+  return runs;
 }
 
 export function collectLeafNamesData(node, names = []) {

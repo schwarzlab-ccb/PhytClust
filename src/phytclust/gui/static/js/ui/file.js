@@ -1,7 +1,4 @@
-/* ============================================================
-   PhytClust – ui/file.js
-   File handling: load tree (Newick) or restore session (JSON).
-   ============================================================ */
+// Load Newick trees and restore saved sessions.
 
 import { newickEl } from "../dom.js";
 import { showStatus } from "./status.js";
@@ -35,15 +32,7 @@ export function loadFile(file) {
     if (isJsonFile(file, text)) {
       try {
         var parsed = JSON.parse(text);
-        var res = applySession(parsed);
-        if (res.errors && res.errors.length) {
-          res.errors.forEach((m) => showToast(m, "info", 4000));
-        }
-        showStatus(
-          "Session restored (" + res.applied + " settings" +
-            (res.hadNewick ? " + tree" : "") + ")",
-          "success",
-        );
+        reportSessionResult(applySession(parsed));
       } catch (err) {
         showStatus("Not a valid session JSON: " + err.message, "danger");
       }
@@ -54,4 +43,20 @@ export function loadFile(file) {
     showStatus("Tree loaded", "success");
   };
   reader.readAsText(file);
+}
+
+/** Report rejected, partially restored, and fully restored sessions consistently. */
+export function reportSessionResult(result) {
+  if (!result.valid) {
+    showStatus(result.errors.join(" "), "danger");
+    return;
+  }
+  const message = `Restored ${result.applied} setting${result.applied === 1 ? "" : "s"}` +
+    (result.hadNewick ? " + tree" : "");
+  if (result.errors.length) {
+    result.errors.forEach(message => showToast(message, "warning", 4000));
+    showStatus(message + " with warnings.", "warning");
+  } else {
+    showStatus(message, "success");
+  }
 }

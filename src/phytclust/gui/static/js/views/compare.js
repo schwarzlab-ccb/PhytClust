@@ -1,47 +1,37 @@
-/* ============================================================
-   PhytClust – views/compare.js
-   Comparison mode: multi-bar tree comparisons.
-   ============================================================ */
+// Comparison mode: multi-bar tree comparisons.
 
 import { state } from "../state.js";
 import { showToast } from "../ui/toast.js";
-import { escapeHtmlAttr } from "../utils.js";
+import { escapeHtmlAttr, collectLeafNamesData } from "../utils.js";
 import { drawComparisonBarsInto } from "../tree/compare.js";
-import { generateClusterColors, getThemeColors } from "../colors.js";
+import { generateClusterColours, getThemeColours, withAlpha } from "../colors.js";
 
-function listTreeLeaves() {
-  const out = [];
-  function walk(node) {
-    if (!node) return;
-    if (node.children && node.children.length) {
-      for (const c of node.children) walk(c);
-      return;
-    }
-    if (node.name) out.push(node.name);
-  }
-  walk(state.NEWICK_RAW_TREE);
-  return out;
-}
-
-export function normalizeClustersForLeaves(rawMap) {
+/**
+ * Keep the assignments for leaves of the drawn tree. Leaves without an
+ * assignment are left out (unassigned); `missing` counts them.
+ */
+export function matchClustersToLeaves(rawMap) {
   if (!rawMap) return null;
-  const leaves = listTreeLeaves();
+  const leaves = collectLeafNamesData(state.newickTree);
   if (!leaves.length) return null;
   const leafSet = new Set(leaves);
-  const out = {};
+  const clusters = {};
   let found = 0;
   Object.keys(rawMap).forEach((name) => {
     if (!leafSet.has(name)) return;
     const cid = parseInt(rawMap[name], 10);
     if (isNaN(cid)) return;
-    out[name] = cid;
+    clusters[name] = cid;
     found += 1;
   });
   if (!found) return null;
-  for (const name of leaves) {
-    if (out[name] == null) out[name] = 0;
-  }
-  return out;
+  return { clusters, missing: leaves.length - found, total: leaves.length };
+}
+
+/** Assignments for the drawn tree's leaves, or null when none match. */
+export function normalizeClustersForLeaves(rawMap) {
+  const matched = matchClustersToLeaves(rawMap);
+  return matched ? matched.clusters : null;
 }
 
 export function getAvailableCompareKs(data) {
@@ -51,15 +41,15 @@ export function getAvailableCompareKs(data) {
 }
 
 export function getClustersForK(k) {
-  if (!state.latestApiData) return null;
-  if (state.latestApiData.all_clusters && state.latestApiData.all_ks) {
-    const idx = state.latestApiData.all_ks.indexOf(k);
-    if (idx >= 0) return state.latestApiData.all_clusters[idx];
+  if (!state.lastRunData) return null;
+  if (state.lastRunData.all_clusters && state.lastRunData.all_ks) {
+    const idx = state.lastRunData.all_ks.indexOf(k);
+    if (idx >= 0) return state.lastRunData.all_clusters[idx];
   }
-  const peakKs = state.latestApiData.k_values || state.latestApiData.ks;
-  if (peakKs && state.latestApiData.clusters) {
+  const peakKs = state.lastRunData.k_values || state.lastRunData.ks;
+  if (peakKs && state.lastRunData.clusters) {
     const idx = peakKs.indexOf(k);
-    if (idx >= 0) return state.latestApiData.clusters[idx];
+    if (idx >= 0) return state.lastRunData.clusters[idx];
   }
   return null;
 }
@@ -111,9 +101,9 @@ export function parseClusterTableText(rawText) {
 }
 
 export function makeCompareConfig() {
-  const ks = getAvailableCompareKs(state.latestApiData);
+  const ks = getAvailableCompareKs(state.lastRunData);
   const k = ks.length ? Number(ks[0]) : null;
-  const id = state.COMPARE_CONFIG_NEXT_ID++;
+  const id = state.compareConfigNextId++;
   return {
     id,
     title: "Bar " + id,
@@ -126,14 +116,14 @@ export function makeCompareConfig() {
 
 export function ensureCompareConfigs(data) {
   const ks = getAvailableCompareKs(data);
-  if (!state.COMPARE_CONFIGS.length) {
+  if (!state.compareConfigs.length) {
     const cfg = makeCompareConfig();
     cfg.title = ks.length ? "k=" + ks[0] : "Bar 1";
     cfg.k = ks.length ? Number(ks[0]) : null;
-    state.COMPARE_CONFIGS = [cfg];
+    state.compareConfigs = [cfg];
   }
 
-  state.COMPARE_CONFIGS.forEach((cfg) => {
+  state.compareConfigs.forEach((cfg) => {
     if (
       cfg.source === "k" &&
       (cfg.k == null || ks.indexOf(Number(cfg.k)) < 0)
@@ -146,11 +136,15 @@ export function ensureCompareConfigs(data) {
   });
 }
 
+/** Cross-tabulate two assignments over the leaves assigned in both. */
 export function buildContingency(mapA, mapB) {
   const rowSet = new Set();
   const colSet = new Set();
-  Object.values(mapA).forEach((v) => rowSet.add(v));
-  Object.values(mapB).forEach((v) => colSet.add(v));
+  Object.keys(mapA).forEach((leaf) => {
+    if (mapA[leaf] == null || mapB[leaf] == null) return;
+    rowSet.add(mapA[leaf]);
+    colSet.add(mapB[leaf]);
+  });
   const rowIds = Array.from(rowSet).sort((a, b) => a - b);
   const colIds = Array.from(colSet).sort((a, b) => a - b);
 
@@ -181,27 +175,13 @@ function clusterLabel(cid) {
   return Number(cid) < 0 ? "†" : "C" + cid;
 }
 
-function colorWithAlpha(color, alpha) {
-  if (!color) return "rgba(128,128,128," + alpha.toFixed(3) + ")";
-  if (color.startsWith("rgba")) {
-    return color.replace(/,\s*[\d.]+\)$/, "," + alpha.toFixed(3) + ")");
-  }
-  if (color.startsWith("rgb")) {
-    return color.replace("rgb(", "rgba(").replace(")", "," + alpha.toFixed(3) + ")");
-  }
-  const r = parseInt(color.slice(1, 3), 16);
-  const g = parseInt(color.slice(3, 5), 16);
-  const b = parseInt(color.slice(5, 7), 16);
-  return "rgba(" + r + "," + g + "," + b + "," + alpha.toFixed(3) + ")";
-}
-
-function renderAgreementPair(container, titleText, mapA, mapB, titleA, titleB) {
+function renderAgreementPair(container, mapA, mapB, titleA, titleB) {
   const ct = buildContingency(mapA, mapB);
   if (!ct.rowIds.length || !ct.colIds.length) return;
 
   const maxCidA = Math.max(-1, ...ct.rowIds.map(Number));
-  const colorsA = maxCidA >= 0 ? generateClusterColors(maxCidA + 1) : [];
-  const tc = getThemeColors();
+  const coloursA = maxCidA >= 0 ? generateClusterColours(maxCidA + 1) : [];
+  const tc = getThemeColours();
 
   const wrap = document.createElement("div");
   wrap.className = "agree-pair";
@@ -254,8 +234,8 @@ function renderAgreementPair(container, titleText, mapA, mapB, titleA, titleB) {
       const isOutlier = nCidA < 0;
       if (count > 0 && ct.rowTotals[r] > 0) {
         const alpha = count / ct.rowTotals[r];
-        const baseColor = isOutlier ? tc.internal : (colorsA.length ? colorsA[nCidA % colorsA.length] : "#888");
-        td.style.background = colorWithAlpha(baseColor, alpha * 0.8 + 0.05);
+        const baseColour = isOutlier ? tc.internal : (coloursA.length ? coloursA[nCidA % coloursA.length] : "#888");
+        td.style.background = withAlpha(baseColour, alpha * 0.8 + 0.05);
       }
       const isExact = ct.rowTotals[r] === count && ct.colTotals[c] === count && count > 0;
       td.textContent = count > 0 ? String(count) : "";
@@ -306,7 +286,7 @@ export function renderAgreementSection(comparisons) {
   }
 
   const refIdx = Math.min(
-    Math.max(0, state.COMPARE_REFERENCE_INDEX || 0),
+    Math.max(0, state.compareReferenceIndex || 0),
     comparisons.length - 1,
   );
   const ref = comparisons[refIdx];
@@ -316,12 +296,12 @@ export function renderAgreementSection(comparisons) {
     if (i === refIdx) continue;
     const other = comparisons[i];
     if (!other.clusters) continue;
-    renderAgreementPair(host, "", ref.clusters, other.clusters, ref.title, other.title);
+    renderAgreementPair(host, ref.clusters, other.clusters, ref.title, other.title);
   }
 }
 
 export function buildComparisonTSV(comparisons) {
-  const leaves = listTreeLeaves();
+  const leaves = collectLeafNamesData(state.newickTree);
   if (!leaves.length || !comparisons || !comparisons.length) return "";
   const header = ["leaf"].concat(comparisons.map((c) => c.title)).join("\t");
   const rows = leaves.map((leaf) => {
@@ -339,7 +319,7 @@ export function buildComparisonTSV(comparisons) {
 function computeChangedLeaves(comparisons) {
   const changed = new Set();
   if (comparisons.length < 2) return changed;
-  const leaves = listTreeLeaves();
+  const leaves = collectLeafNamesData(state.newickTree);
   for (const leaf of leaves) {
     let first = null;
     let differs = false;
@@ -374,10 +354,10 @@ function updateCompareReferenceSelect(comparisons) {
     opt.textContent = c.title;
     sel.appendChild(opt);
   });
-  if (state.COMPARE_REFERENCE_INDEX >= comparisons.length) {
-    state.COMPARE_REFERENCE_INDEX = 0;
+  if (state.compareReferenceIndex >= comparisons.length) {
+    state.compareReferenceIndex = 0;
   }
-  sel.value = String(state.COMPARE_REFERENCE_INDEX);
+  sel.value = String(state.compareReferenceIndex);
 }
 
 function updateCompareSummary(comparisons, changed) {
@@ -387,7 +367,7 @@ function updateCompareSummary(comparisons, changed) {
     el.textContent = "";
     return;
   }
-  const total = listTreeLeaves().length;
+  const total = collectLeafNamesData(state.newickTree).length;
   const same = total - changed.size;
   el.textContent = same + " stable · " + changed.size + " changed";
 }
@@ -406,15 +386,15 @@ function updateCompareHeader(comparisons) {
 export function renderCompareConfigList() {
   const host = document.getElementById("compare-config-list");
   if (!host) return;
-  if (!state.latestApiData) {
+  if (!state.lastRunData) {
     host.innerHTML = "";
     return;
   }
 
-  const ks = getAvailableCompareKs(state.latestApiData);
+  const ks = getAvailableCompareKs(state.lastRunData);
   host.innerHTML = "";
 
-  state.COMPARE_CONFIGS.forEach((cfg) => {
+  state.compareConfigs.forEach((cfg) => {
     const card = document.createElement("div");
     card.className = "compare-config-card";
     card.dataset.cfgId = String(cfg.id);
@@ -517,8 +497,8 @@ export function renderCompareConfigList() {
       reader.onload = function (e) {
         const txt = e && e.target ? e.target.result : "";
         const parsed = parseClusterTableText(txt);
-        const normalized = normalizeClustersForLeaves(parsed.map);
-        if (!normalized) {
+        const matched = matchClustersToLeaves(parsed.map);
+        if (!matched) {
           showToast(
             "Could not parse a valid leaf/cluster mapping from file.",
             "danger",
@@ -526,7 +506,7 @@ export function renderCompareConfigList() {
           );
           return;
         }
-        cfg.fileClusters = normalized;
+        cfg.fileClusters = matched.clusters;
         cfg.fileName = file.name;
         if (
           !titleInput.value.trim() ||
@@ -542,6 +522,14 @@ export function renderCompareConfigList() {
             2500,
           );
         }
+        if (matched.missing > 0) {
+          showToast(
+            matched.missing + " of " + matched.total + " tree leaves are not in " +
+              file.name + "; they are shown as unassigned and left out of the agreement matrix.",
+            "warning",
+            6000,
+          );
+        }
         renderCompareConfigList();
         drawComparison();
       };
@@ -549,8 +537,8 @@ export function renderCompareConfigList() {
     });
 
     removeBtn.addEventListener("click", function () {
-      state.COMPARE_CONFIGS = state.COMPARE_CONFIGS.filter((x) => x.id !== cfg.id);
-      if (!state.COMPARE_CONFIGS.length) state.COMPARE_CONFIGS = [makeCompareConfig()];
+      state.compareConfigs = state.compareConfigs.filter((x) => x.id !== cfg.id);
+      if (!state.compareConfigs.length) state.compareConfigs = [makeCompareConfig()];
       renderCompareConfigList();
       drawComparison();
     });
@@ -562,13 +550,37 @@ export function populateCompareSelectors(data) {
   renderCompareConfigList();
 }
 
+/** The configured bars that currently resolve to assignments, as {title, clusters}. */
+export function buildCurrentComparisons() {
+  const comparisons = [];
+  (state.compareConfigs || []).forEach((cfg) => {
+    if (cfg.source === "k") {
+      const clusters = normalizeClustersForLeaves(getClustersForK(Number(cfg.k)));
+      if (clusters) {
+        comparisons.push({
+          title: cfg.title || (cfg.k != null ? "k=" + cfg.k : "k"),
+          clusters,
+        });
+      }
+      return;
+    }
+    if (cfg.source === "file" && cfg.fileClusters) {
+      comparisons.push({
+        title: cfg.title || cfg.fileName || "file",
+        clusters: cfg.fileClusters,
+      });
+    }
+  });
+  return comparisons;
+}
+
 export function drawComparison() {
   const leftHost = document.getElementById("compare-tree-left");
   const agreeHost = document.getElementById("compare-agreement");
   const headerEl = document.getElementById("compare-left-label");
   const summaryEl = document.getElementById("compare-summary");
 
-  if (!state.latestApiData || !state.NEWICK_RAW_TREE) {
+  if (!state.lastRunData || !state.newickTree) {
     if (leftHost) {
       leftHost.innerHTML =
         '<div class="compare-empty">' +
@@ -587,31 +599,11 @@ export function drawComparison() {
 
   if (!leftHost) return;
 
-  const comparisons = [];
-  state.COMPARE_CONFIGS.forEach((cfg) => {
-    if (cfg.source === "k") {
-      const raw = getClustersForK(Number(cfg.k));
-      const clusters = normalizeClustersForLeaves(raw);
-      if (clusters) {
-        comparisons.push({
-          title: cfg.title || (cfg.k != null ? "k=" + cfg.k : "k"),
-          clusters,
-        });
-      }
-      return;
-    }
-    if (cfg.source === "file" && cfg.fileClusters) {
-      comparisons.push({
-        title: cfg.title || cfg.fileName || "file",
-        clusters: cfg.fileClusters,
-      });
-    }
-  });
-
-  state.COMPARE_CHANGED_LEAVES = computeChangedLeaves(comparisons);
+  const comparisons = buildCurrentComparisons();
+  state.compareChangedLeaves = computeChangedLeaves(comparisons);
   updateCompareHeader(comparisons);
   updateCompareReferenceSelect(comparisons);
-  updateCompareSummary(comparisons, state.COMPARE_CHANGED_LEAVES);
+  updateCompareSummary(comparisons, state.compareChangedLeaves);
   if (!comparisons.length) {
     leftHost.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--pc-text-muted);font-size:14px;">No comparison bars configured yet.</div>';

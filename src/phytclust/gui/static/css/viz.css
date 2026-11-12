@@ -19,7 +19,7 @@
   display: flex;
   flex-direction: column;
 }
-#tree_display {
+#tree-display {
   width: 100%;
   height: 100%;
   min-height: 500px;
@@ -28,7 +28,7 @@
 /* ===================== EMPTY STATE ============================
    Shown in the viewer panel when no tree has been loaded yet.
    Visibility is controlled directly via inline style by drawTree()
-   in tree/draw.js — gated on state.NEWICK_RAW_TREE rather than a
+   in tree/draw.js — gated on state.newickTree rather than a
    CSS class so no stylesheet rule can accidentally hide it. */
 .tree-empty-state {
   position: absolute;
@@ -45,7 +45,7 @@
   z-index: 5;
 }
 
-/* Subtle palette flourish that ties the empty state to the brand */
+/* Spectrum strip. */
 .empty-spectrum {
   width: 220px;
   height: 4px;
@@ -59,7 +59,8 @@
     var(--pc-palette-5),
     var(--pc-palette-6),
     var(--pc-palette-7),
-    var(--pc-palette-8)
+    var(--pc-palette-8),
+    var(--pc-palette-9)
   );
   opacity: 0.85;
   margin-bottom: 4px;
@@ -133,7 +134,7 @@
   padding: 0 5px;
 }
 
-/* Make sure tree_display can be overlaid by the empty state */
+/* Make sure tree-display can be overlaid by the empty state */
 #viewer {
   position: relative;
 }
@@ -153,7 +154,7 @@
   background: var(--pc-danger-subtle);
   color: var(--pc-danger);
 }
-#optimalk_plot {
+#scores-plot {
   width: 100%;
   height: 100%;
   min-height: 400px;
@@ -266,15 +267,6 @@
 }
 .compare-empty-text { max-width: 420px; font-size: 13px; line-height: 1.5; }
 
-/* Highlight leaves whose cluster differs across bars */
-.compare-tree .compare-leaf-changed text {
-  font-weight: 700;
-  fill: #f97316 !important;
-}
-.compare-tree .compare-leaf-changed-marker {
-  fill: #f97316;
-}
-
 /* ===================== COMPARE AGREEMENT MATRIX ===================== */
 .compare-agreement { padding: 12px 16px; border-top: 1px solid var(--pc-border); overflow-x: auto; }
 .agree-pair { margin-bottom: 20px; }
@@ -283,7 +275,6 @@
 .agree-table th, .agree-table td { padding: 4px 8px; text-align: center; min-width: 36px; }
 .agree-table .agree-row-label { text-align: right; font-weight: 600; color: var(--pc-text); padding-right: 10px; white-space: nowrap; }
 .agree-table .agree-col-label { font-weight: 600; color: var(--pc-text); white-space: nowrap; }
-.agree-table .agree-col-bar { font-size: 10px; color: var(--pc-text-muted); }
 .agree-cell { border: 1px solid var(--pc-border); border-radius: 3px; font-weight: 500; }
 .agree-cell.agree-cell-zero { color: transparent; }
 .badge-split { display: inline-block; margin-left: 4px; font-size: 9px; font-weight: 700; background: #f97316; color: white; border-radius: 3px; padding: 1px 4px; vertical-align: middle; }
@@ -359,47 +350,6 @@
   border-radius: 3px;
   accent-color: var(--pc-accent);
   cursor: pointer;
-}
-
-/* ===================== SLIDER CONTROLS ===================== */
-.slider-control {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.slider-control input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  background: var(--pc-border);
-  border-radius: 2px;
-  outline: none;
-  width: 72px;
-}
-.slider-control input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--pc-accent);
-  cursor: pointer;
-  border: 2px solid var(--pc-surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-.slider-control input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--pc-accent);
-  cursor: pointer;
-  border: 2px solid var(--pc-surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-.slider-label {
-  font-size: 11px;
-  color: var(--pc-text-muted);
-  min-width: 14px;
-  text-align: center;
 }
 
 /* ===================== NODE HOVER TOOLTIP ===================== */

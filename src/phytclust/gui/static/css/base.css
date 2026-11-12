@@ -1,22 +1,13 @@
-/* ============================================================
-   PhytClust – Modern Design System
-   ============================================================
-   Light/dark theming via [data-theme] on <html>.
-   All colors use CSS custom properties so switching theme
-   swaps everything at once.
-   ============================================================ */
-
 /* --- Light Theme (default) --- */
 :root,
 [data-theme="light"] {
   --pc-primary: #2b2638;
-  --pc-primary-light: #6b61ac;
   --pc-accent: #3d8b7a;
+  --pc-on-accent: #ffffff;
   --pc-accent-hover: #327565;
   --pc-accent-subtle: rgba(61, 139, 122, 0.1);
   --pc-accent-glow: rgba(61, 139, 122, 0.25);
 
-  --pc-green: #5a9e8f;
   --pc-warning: #c9a84e;
   --pc-danger: #b85454;
   --pc-danger-subtle: rgba(184, 84, 84, 0.1);
@@ -26,6 +17,8 @@
   --pc-surface-glass: rgba(255, 255, 255, 0.82);
   --pc-border: #e0e4e8;
   --pc-border-subtle: #eef0f2;
+  --pc-hover: #eef0f2;
+  --pc-bg-elevated: #eef0f2;
 
   --pc-text: #1e293b;
   --pc-text-secondary: #475569;
@@ -42,34 +35,31 @@
   --pc-header-height: 56px;
   --pc-transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
-  --pc-link-color: #64748b;
   --pc-tree-branch: #000000;
   --pc-tree-label: #334155;
   --pc-tree-internal: #64748b;
 
-  /* PhytClust cluster palette — also used for the brand spectrum strip.
-     Order chosen to flow purple → blue → teal → olive → yellow → red → pink,
-     mirroring the gradient sweep of the wordmark logo. */
+  /* Logo spectrum, left to right. */
   --pc-palette-1: #6e3f8a;
   --pc-palette-2: #3f408a;
   --pc-palette-3: #3f648a;
   --pc-palette-4: #3d7c74;
   --pc-palette-5: #849060;
   --pc-palette-6: #ceb94b;
-  --pc-palette-7: #b84b4b;
-  --pc-palette-8: #da63aa;
+  --pc-palette-7: #d09050;
+  --pc-palette-8: #b84b4b;
+  --pc-palette-9: #da63aa;
 }
 
 /* --- Dark Theme --- */
 [data-theme="dark"] {
   --pc-primary: #1a1e25;
-  --pc-primary-light: #6bb5a5;
   --pc-accent: #5bbaa6;
+  --pc-on-accent: #10231f;
   --pc-accent-hover: #72c9b6;
   --pc-accent-subtle: rgba(91, 186, 166, 0.14);
   --pc-accent-glow: rgba(91, 186, 166, 0.3);
 
-  --pc-green: #6bb5a5;
   --pc-warning: #d4bf6a;
   --pc-danger: #d87171;
   --pc-danger-subtle: rgba(216, 113, 113, 0.12);
@@ -79,6 +69,8 @@
   --pc-surface-glass: rgba(35, 40, 48, 0.9);
   --pc-border: #333a44;
   --pc-border-subtle: #2a3038;
+  --pc-hover: #2a3038;
+  --pc-bg-elevated: #2a3038;
 
   --pc-text: #e2e8f0;
   --pc-text-secondary: #94a3b8;
@@ -88,22 +80,19 @@
   --pc-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.28);
   --pc-shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.36);
 
-  --pc-link-color: #b0a8c8;
-  --pc-tree-branch: #000000;
+  --pc-tree-branch: #c4cbd6;
   --pc-tree-label: #d0c8e0;
   --pc-tree-internal: #8a80a8;
 
-  /* Same brand palette in dark mode — slightly desaturated would also
-     work here, but keeping identical hues makes the spectrum strip the
-     same visual signature regardless of theme. */
   --pc-palette-1: #6e3f8a;
   --pc-palette-2: #3f408a;
   --pc-palette-3: #3f648a;
   --pc-palette-4: #3d7c74;
   --pc-palette-5: #849060;
   --pc-palette-6: #ceb94b;
-  --pc-palette-7: #b84b4b;
-  --pc-palette-8: #da63aa;
+  --pc-palette-7: #d09050;
+  --pc-palette-8: #b84b4b;
+  --pc-palette-9: #da63aa;
 }
 
 /* --- Reset & Base --- */

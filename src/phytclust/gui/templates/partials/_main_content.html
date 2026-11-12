@@ -5,7 +5,6 @@
           <button
             class="tab-btn active"
             data-tab="viewer"
-            id="viewer-tab"
             type="button"
           >
             Clustering
@@ -13,20 +12,18 @@
           <button
             class="tab-btn"
             data-tab="compare"
-            id="compare-tab"
             type="button"
           >
             Compare
           </button>
           <button
             class="tab-btn"
-            data-tab="viewer-optimal-k"
-            id="viewer-optimal-k-tab"
+            data-tab="viewer-scores"
             type="button"
           >
             Scores
           </button>
-          <button class="tab-btn" data-tab="debug" id="debug-tab" type="button">
+          <button class="tab-btn" data-tab="session" type="button">
             JSON
           </button>
           <div class="tab-spacer"></div>
@@ -121,18 +118,18 @@
             </select>
             <span id="palette-preview" class="palette-preview"></span>
             <button
-              id="btn-shuffle-colors"
+              id="btn-shuffle-colours"
               class="btn-icon"
               type="button"
-              title="Randomize color order"
+              title="Randomise colour order"
               style="width: 24px; height: 24px; font-size: 12px"
             >
-              &#x1F500;
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></svg>
             </button>
           </div>
           <div class="toolbar-group">
-            <label for="color-mode">Color</label>
-            <select id="color-mode">
+            <label for="colour-mode">Colour</label>
+            <select id="colour-mode">
               <option value="bars">Side bars</option>
               <option value="boxes">Boxes (MRCA)</option>
               <option value="nodes">Nodes</option>
@@ -177,7 +174,7 @@
               type="button"
               title="Copy to clipboard"
             >
-              &#x1F4CB;
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
             </button>
             <div class="copy-dropdown" id="copy-dropdown" style="display: none">
               <div class="copy-dropdown-title">Copy to clipboard</div>
@@ -278,7 +275,7 @@
               type="button"
               title="Copy comparison to clipboard"
             >
-              &#x1F4CB;
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
             </button>
             <div class="copy-dropdown" id="copy-dropdown-compare" style="display: none">
               <div class="copy-dropdown-title">Copy to clipboard</div>
@@ -311,7 +308,7 @@
         <div id="compare-config-list" class="compare-config-list"></div>
 
         <!-- Optimal k toolbar -->
-        <div class="toolbar" id="optk-toolbar" style="display: none">
+        <div class="toolbar" id="scores-toolbar" style="display: none">
           <div class="toolbar-group">
             <label for="axis-mode">X-axis</label>
             <select id="axis-mode">
@@ -320,8 +317,8 @@
             </select>
           </div>
           <div class="toolbar-group">
-            <label for="optk-width-scale" title="Widen the plot to scroll through all k values">Width</label>
-            <select id="optk-width-scale">
+            <label for="scores-width-scale" title="Widen the plot to scroll through all k values">Width</label>
+            <select id="scores-width-scale">
               <option value="1">Fit</option>
               <option value="2">2&times;</option>
               <option value="4">4&times;</option>
@@ -331,19 +328,19 @@
           <span class="text-sm text-muted">Scores shown for k &ge; 2</span>
           <div style="flex: 1"></div>
           <button
-            id="btn-copy-maxk"
+            id="btn-copy-scores"
             class="btn-icon"
             type="button"
             title="Copy plot SVG"
           >
-            &#x1F4CB;
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
           </button>
         </div>
 
         <!-- Visualization Panels -->
         <div class="viz-container">
           <div class="viz-panel active" id="viewer" role="tabpanel">
-            <div id="tree_display"></div>
+            <div id="tree-display"></div>
             <div class="tree-empty-state" id="tree-empty-state" role="region" aria-label="Get started">
               <div class="empty-spectrum" aria-hidden="true"></div>
               <h2 class="empty-title">Get started in three steps</h2>
@@ -403,11 +400,11 @@
             </div>
           </div>
 
-          <div class="viz-panel" id="viewer-optimal-k" role="tabpanel">
-            <div id="optimalk_plot"></div>
+          <div class="viz-panel" id="viewer-scores" role="tabpanel">
+            <div id="scores-plot"></div>
           </div>
 
-          <div class="viz-panel json-panel" id="debug" role="tabpanel">
+          <div class="viz-panel json-panel" id="session" role="tabpanel">
             <div class="session-toolbar">
               <span class="session-title">Session</span>
               <span class="session-hint">
@@ -430,7 +427,7 @@
                 </button>
               </div>
             </div>
-            <pre id="result">(no session yet — load a tree and configure parameters)</pre>
+            <pre id="session-json">(no session yet — load a tree and configure parameters)</pre>
           </div>
         </div>
 

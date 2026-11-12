@@ -1,7 +1,4 @@
-/* ============================================================
-   PhytClust – ui/collapsibles.js
-   Collapsible section helper.
-   ============================================================ */
+// Toggle collapsible sections.
 
 export function wireCollapse(toggleId, bodyId) {
   var toggle = document.getElementById(toggleId);
@@ -10,8 +7,7 @@ export function wireCollapse(toggleId, bodyId) {
   toggle.addEventListener("click", function () {
     var isOpen = body.classList.contains("open");
     body.classList.toggle("open", !isOpen);
-    toggle.setAttribute("aria-expanded", !isOpen);
-    var chev = toggle.querySelector(".chevron");
-    if (chev) chev.innerHTML = isOpen ? "&#x25B6;" : "&#x25BC;";
+    // The chevron turns via CSS on [aria-expanded="true"] (sidebar.css).
+    toggle.setAttribute("aria-expanded", String(!isOpen));
   });
 }

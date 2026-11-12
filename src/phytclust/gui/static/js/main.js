@@ -1,26 +1,23 @@
-/* ============================================================
-   PhytClust – main.js
-   Entry point: DOM ready — wire everything.
-   ============================================================ */
+// Entry point: wire everything once the DOM is ready.
 
-import { state, EXAMPLE_NEWICK, SELECTED_CLUSTER_IDS, BOX_LABEL_MAP, NODE_CUSTOM, getBoxAdjust } from "./state.js";
-import { newickEl, extraResolutionEl } from "./dom.js";
-import { resetExtraParams, collectLeafNamesData } from "./utils.js";
-import { BASE_COLORS, shuffle, generateClusterColors, initTheme, toggleTheme } from "./colors.js";
+import { state, EXAMPLE_NEWICK, selectedClusterIds, boxLabelMap, nodeCustom, getBoxAdjust } from "./state.js";
+import { newickEl } from "./dom.js";
+import { resetParams, collectLeafNamesData, escapeHtmlAttr } from "./utils.js";
+import { baseColours, shuffle, generateClusterColours, initTheme, toggleTheme } from "./colors.js";
 import { showToast } from "./ui/toast.js";
 import { showStatus, getStatusLog, clearStatusLog } from "./ui/status.js";
 import { switchTab } from "./ui/tabs.js";
 import { wireCollapse } from "./ui/collapsibles.js";
-import { handleFileSelect, loadFile } from "./ui/file.js";
+import { handleFileSelect, loadFile, reportSessionResult } from "./ui/file.js";
 import { exportSvgFromEl, exportPngFromEl, exportTSV, saveToServer, copySvgToClipboard, copyRasterToClipboard } from "./ui/export.js";
 import { wireAppearanceTrigger } from "./ui/appearance_panel.js";
 import { collectSession, applySession, sessionSizeWarning } from "./session.js";
-import { runPhytClust, refreshResultsStale } from "./api.js";
-import { drawTree, fitTree, clearAllCollapsedFlags, clearTree } from "./tree/draw.js";
-import { hideNodeContextMenu, showNodeContextMenu, getNodeCustom, nodeDisplayName } from "./tree/nodes.js";
+import { runPhytClust, refreshResultsStale, clearResults } from "./api.js";
+import { drawTree, fitTree, clearAllCollapsedFlags } from "./tree/draw.js";
+import { hideNodeContextMenu, getNodeCustom, nodeDisplayName } from "./tree/nodes.js";
 import { fitCompare } from "./tree/compare.js";
-import { drawComparison, makeCompareConfig, renderCompareConfigList, buildComparisonTSV, getClustersForK, normalizeClustersForLeaves } from "./views/compare.js";
-import { drawOptimalK } from "./views/optimal_k.js";
+import { drawComparison, makeCompareConfig, renderCompareConfigList, buildComparisonTSV, buildCurrentComparisons } from "./views/compare.js";
+import { drawScores } from "./views/scores.js";
 import {
   getCurrentClusterIds,
   updateClusterEditorAvailability,
@@ -28,8 +25,8 @@ import {
   closeClusterEditor,
   saveClusterEditor,
   renderClusterEditorRows,
-  populateClusterSelector,
   switchCluster,
+  refreshOutlierMarks,
   cycleCluster,
   toggleClusterViewMode,
 } from "./views/cluster_editor.js";
@@ -43,16 +40,11 @@ document.addEventListener("contextmenu", function (e) {
   if (!e.target.closest(".tree-node")) hideNodeContextMenu();
 });
 
-/* ─────────────────────────────────────
-   DOM Ready – Wire Everything
-   ───────────────────────────────────── */
 document.addEventListener("DOMContentLoaded", function () {
-  var appLoading = document.getElementById("app-loading");
-  if (appLoading) appLoading.style.display = "none";
   showStatus("Ready", "success");
 
   // ── Appearance panel ──
-  // Owns every visual option (labels, branches, nodes, cluster boxes, scale).
+  // Build appearance controls for labels, branches, nodes, and cluster boxes.
   // Spec lives in ui/appearance_panel.js; controls flow through state.render
   // via setRenderOption + a redraw on every change.
   wireAppearanceTrigger({
@@ -63,6 +55,11 @@ document.addEventListener("DOMContentLoaded", function () {
       if (document.getElementById("compare").classList.contains("active"))
         drawComparison();
     },
+  });
+
+  document.addEventListener("phytclust:appearance-restored", () => {
+    drawTree();
+    if (document.getElementById("compare").classList.contains("active")) drawComparison();
   });
 
   // ── Sidebar toggle ──
@@ -93,18 +90,12 @@ document.addEventListener("DOMContentLoaded", function () {
   var btnClearTree = document.getElementById("btn-clear-tree");
   if (btnClearTree) {
     btnClearTree.addEventListener("click", function () {
-      state.NEWICK_RAW_TREE = null;
-      state.latestApiData = null;
-      state.lastRunSignature = null;
-      refreshResultsStale();
-      state.CURRENT_CLUSTERS = {};
-      state.CLUSTER_COLORS = [];
       if (newickEl) newickEl.value = "";
       if (fileInput) fileInput.value = "";
       var fileNameEl = document.getElementById("file-name");
       if (fileNameEl) fileNameEl.style.display = "none";
-      clearTree();
-      drawComparison();
+      selectedClusterIds.clear();
+      clearResults();
       showStatus("Tree cleared", "info");
     });
   }
@@ -164,10 +155,8 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   // ── Keyboard shortcuts modal ──
-  // Reuses the existing modal-custom skeleton; opened by `?`, closed by Esc /
-  // backdrop click / X button. We deliberately ignore the keystroke when the
-  // user is typing in an input/textarea so the search box and Newick paste
-  // area still accept literal "?" or "/" characters.
+  // ? opens, Esc / backdrop / X close. Ignored while typing in an input so the
+  // search box and Newick area still accept ? and /.
   var shortcutsModal = document.getElementById("shortcutsModal");
   var shortcutsBackdrop = document.getElementById("shortcutsBackdrop");
   function openShortcuts() {
@@ -182,8 +171,7 @@ document.addEventListener("DOMContentLoaded", function () {
   if (btnShortcutsClose) btnShortcutsClose.addEventListener("click", closeShortcuts);
   if (shortcutsBackdrop) shortcutsBackdrop.addEventListener("click", closeShortcuts);
 
-  // Global single-key shortcuts. Skipped entirely when focus is in any kind
-  // of text input so we don't hijack the user's typing.
+  // Single-key shortcuts; skipped while a text input has focus.
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     if (
@@ -266,14 +254,26 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // ── Reset button ──
-  var resetBtn = document.getElementById("btn-extra-reset");
+  var resetBtn = document.getElementById("btn-reset-params");
   if (resetBtn)
     resetBtn.addEventListener("click", function (e) {
       e.preventDefault();
-      resetExtraParams();
+      resetParams();
       refreshResultsStale();
       showToast("Parameters reset to defaults.", "info", 2000);
     });
+
+  // ── Outlier marking ──
+  // "Mark outliers" changes how the current result is drawn and exported,
+  // not the clustering itself, so redraw without asking for a new run.
+  var markOutliersEl = document.getElementById("mark-outliers");
+  if (markOutliersEl) {
+    markOutliersEl.addEventListener("change", function () {
+      refreshOutlierMarks();
+      drawTree();
+      renderClusterEditorRows();
+    });
+  }
 
   // ── Mode selector ──
   document.querySelectorAll("#mode-selector .mode-btn").forEach(function (btn) {
@@ -284,13 +284,12 @@ document.addEventListener("DOMContentLoaded", function () {
       btn.classList.add("active");
       var mode = btn.dataset.mode;
       var paramK = document.getElementById("param-k");
-      var paramTopN = document.getElementById("param-topn");
+      var paramTopN = document.getElementById("param-top-n");
       var paramBins = document.getElementById("param-bins");
       if (paramK) paramK.style.display = mode === "k" ? "" : "none";
       if (paramTopN) paramTopN.style.display = mode === "k" ? "none" : "";
       if (paramBins)
         paramBins.style.display = mode === "resolution" ? "" : "none";
-      if (extraResolutionEl) extraResolutionEl.checked = mode === "resolution";
       refreshResultsStale();
     });
   });
@@ -303,25 +302,22 @@ document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll(".tab-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       switchTab(btn.dataset.tab);
-      if (btn.dataset.tab === "debug") refreshSessionPanel();
+      if (btn.dataset.tab === "session") refreshSessionPanel();
     });
   });
   switchTab("viewer");
 
   // ── Session JSON tab ──
-  // The "JSON" tab shows a portable session document — sidebar params,
-  // appearance state, optionally the Newick. It does NOT show the API
-  // result dump (which used to live here); developers can use the browser
-  // console for raw payloads.
+  // A portable session document: params, appearance and optionally the Newick.
   function getSessionOpts() {
     const cb = document.getElementById("session-include-newick");
     return { includeNewick: cb ? cb.checked : true };
   }
   function refreshSessionPanel() {
-    const resultPane = document.getElementById("result");
-    if (!resultPane) return;
+    const sessionEl = document.getElementById("session-json");
+    if (!sessionEl) return;
     const session = collectSession(getSessionOpts());
-    resultPane.textContent = JSON.stringify(session, null, 2);
+    sessionEl.textContent = JSON.stringify(session, null, 2);
     const warn = sessionSizeWarning(session);
     if (warn) console.info("[phytclust session] " + warn);
   }
@@ -333,7 +329,7 @@ document.addEventListener("DOMContentLoaded", function () {
         refreshResultsStale();
         if (
           eventName === "change" &&
-          document.getElementById("debug").classList.contains("active")
+          document.getElementById("session").classList.contains("active")
         ) {
           refreshSessionPanel();
         }
@@ -382,15 +378,9 @@ document.addEventListener("DOMContentLoaded", function () {
       reader.onload = function (e) {
         try {
           const parsed = JSON.parse(e.target.result || "");
-          const { applied, errors, hadNewick } = applySession(parsed);
-          if (errors.length) errors.forEach((m) => showToast(m, "info", 4000));
+          const { valid, applied, errors, hadNewick } = applySession(parsed);
+          reportSessionResult({ valid, applied, errors, hadNewick });
           if (hadNewick) setNewickAreaOpen(true);
-          showToast(
-            `Restored ${applied} setting${applied === 1 ? "" : "s"}` +
-              (hadNewick ? " + tree" : ""),
-            "success",
-            2500,
-          );
           refreshSessionPanel();
         } catch (err) {
           showToast("Could not parse session JSON: " + err.message, "danger");
@@ -431,8 +421,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // ── Activity log panel ──
-  // Opened by the clock button in the status bar. Shows a reverse-chronological
-  // list of all showStatus messages (max 50). Auto-refreshes while open.
+  // Reverse-chronological list of showStatus messages (max 50).
   var btnActivityLog = document.getElementById("btn-activity-log");
   var activityLogPanel = document.getElementById("activity-log-panel");
   var btnActivityLogClear = document.getElementById("btn-activity-log-clear");
@@ -453,7 +442,7 @@ document.addEventListener("DOMContentLoaded", function () {
           return (
             '<div class="log-entry log-entry-run">' +
             '<span class="log-ts">' + ts + "</span>" +
-            '<span class="log-msg">' + r.label +
+            '<span class="log-msg">' + escapeHtmlAttr(r.label) +
             (r.nLeaves ? " · " + r.nLeaves + " leaves" : "") +
             "</span></div>"
           );
@@ -478,7 +467,7 @@ document.addEventListener("DOMContentLoaded", function () {
           return (
             '<div class="log-entry log-entry-' + e.type + '">' +
             '<span class="log-ts">' + ts + "</span>" +
-            '<span class="log-msg">' + e.message + "</span></div>"
+            '<span class="log-msg">' + escapeHtmlAttr(e.message) + "</span></div>"
           );
         })
         .join("");
@@ -571,7 +560,7 @@ document.addEventListener("DOMContentLoaded", function () {
         var type = item.dataset.saveType;
         if (type === "tsv") exportTSV();
         if (type === "tree_plot")
-          exportSvgFromEl("#tree_display", "phytclust_tree.svg");
+          exportSvgFromEl("#tree-display", "phytclust_tree.svg");
         if (type === "tree_png") {
           var dpiStr = prompt(
             "Enter DPI for publication-ready PNG (default 300):",
@@ -580,10 +569,10 @@ document.addEventListener("DOMContentLoaded", function () {
           if (dpiStr === null) return;
           var dpi = parseInt(dpiStr, 10);
           if (isNaN(dpi) || dpi < 72) dpi = 300;
-          exportPngFromEl("#tree_display", "phytclust_tree.png", dpi);
+          exportPngFromEl("#tree-display", "phytclust_tree.png", dpi);
         }
         if (type === "k_plot")
-          exportSvgFromEl("#optimalk_plot", "phytclust_scores.svg");
+          exportSvgFromEl("#scores-plot", "phytclust_scores.svg");
         if (type === "save_server") saveToServer();
       });
     });
@@ -628,7 +617,7 @@ document.addEventListener("DOMContentLoaded", function () {
   wireCopyDropdown({
     btnId: "btn-copy-tree",
     dropdownId: "copy-dropdown",
-    targetSelector: "#tree_display",
+    targetSelector: "#tree-display",
     dpiInputId: "copy-dpi",
     publicationCheckboxId: "copy-publication",
     redraw: drawTree,
@@ -641,16 +630,16 @@ document.addEventListener("DOMContentLoaded", function () {
     publicationCheckboxId: "copy-publication-compare",
     redraw: drawComparison,
   });
-  var btnCopyMaxk = document.getElementById("btn-copy-maxk");
-  if (btnCopyMaxk)
-    btnCopyMaxk.addEventListener("click", function () {
-      copySvgToClipboard("#optimalk_plot");
+  var btnCopyScores = document.getElementById("btn-copy-scores");
+  if (btnCopyScores)
+    btnCopyScores.addEventListener("click", function () {
+      copySvgToClipboard("#scores-plot");
     });
 
-  var optkWidthScaleEl = document.getElementById("optk-width-scale");
-  if (optkWidthScaleEl) {
-    optkWidthScaleEl.addEventListener("change", function () {
-      drawOptimalK(state.latestOptimalKData);
+  var scoresWidthScaleEl = document.getElementById("scores-width-scale");
+  if (scoresWidthScaleEl) {
+    scoresWidthScaleEl.addEventListener("change", function () {
+      drawScores(state.lastScoresData);
     });
   }
 
@@ -724,11 +713,11 @@ document.addEventListener("DOMContentLoaded", function () {
       e.key === "ArrowUp" ||
       e.key === "ArrowDown";
 
-    if (isArrow && state.render.clusters.colorMode === "boxes" && SELECTED_CLUSTER_IDS.size > 0) {
+    if (isArrow && state.render.clusters.colorMode === "boxes" && selectedClusterIds.size > 0) {
       e.preventDefault();
       var step = 4;
       var resize = !!e.shiftKey;
-      SELECTED_CLUSTER_IDS.forEach(function (cid) {
+      selectedClusterIds.forEach(function (cid) {
         var adj = getBoxAdjust(cid);
         if (resize) {
           if (e.key === "ArrowLeft") adj.padX = Math.max(0, adj.padX - step);
@@ -746,8 +735,8 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    if (e.key === "Escape" && SELECTED_CLUSTER_IDS.size > 0) {
-      SELECTED_CLUSTER_IDS.clear();
+    if (e.key === "Escape" && selectedClusterIds.size > 0) {
+      selectedClusterIds.clear();
       drawTree();
       showToast("Cluster focus cleared", "info", 1500);
       return;
@@ -767,7 +756,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var compareAddBtn = document.getElementById("compare-add-bar");
   if (compareAddBtn) {
     compareAddBtn.addEventListener("click", function () {
-      state.COMPARE_CONFIGS.push(makeCompareConfig());
+      state.compareConfigs.push(makeCompareConfig());
       renderCompareConfigList();
       drawComparison();
     });
@@ -780,9 +769,9 @@ document.addEventListener("DOMContentLoaded", function () {
   // ── Compare: highlight changed leaves ──
   var compareHighlightCb = document.getElementById("compare-highlight-changes");
   if (compareHighlightCb) {
-    compareHighlightCb.checked = !!state.COMPARE_HIGHLIGHT_CHANGES;
+    compareHighlightCb.checked = !!state.compareHighlightChanges;
     compareHighlightCb.addEventListener("change", function () {
-      state.COMPARE_HIGHLIGHT_CHANGES = compareHighlightCb.checked;
+      state.compareHighlightChanges = compareHighlightCb.checked;
       drawComparison();
     });
   }
@@ -791,23 +780,9 @@ document.addEventListener("DOMContentLoaded", function () {
   var compareReferenceSel = document.getElementById("compare-reference");
   if (compareReferenceSel) {
     compareReferenceSel.addEventListener("change", function () {
-      state.COMPARE_REFERENCE_INDEX = parseInt(compareReferenceSel.value, 10) || 0;
+      state.compareReferenceIndex = parseInt(compareReferenceSel.value, 10) || 0;
       drawComparison();
     });
-  }
-
-  function buildCurrentComparisons() {
-    var comparisons = [];
-    (state.COMPARE_CONFIGS || []).forEach(function (cfg) {
-      var clusters = null;
-      if (cfg.source === "k") {
-        clusters = normalizeClustersForLeaves(getClustersForK(Number(cfg.k)));
-      } else if (cfg.source === "file") {
-        clusters = cfg.fileClusters || null;
-      }
-      if (clusters) comparisons.push({ title: cfg.title || "Bar " + cfg.id, clusters: clusters });
-    });
-    return comparisons;
   }
 
   // ── Copy TSV ──
@@ -851,10 +826,10 @@ document.addEventListener("DOMContentLoaded", function () {
         drawComparison();
     });
 
-  // ── Color mode ──
-  var colorModeSelect = document.getElementById("color-mode");
-  if (colorModeSelect)
-    colorModeSelect.addEventListener("change", function () {
+  // ── Colour mode ──
+  var colourModeSelect = document.getElementById("colour-mode");
+  if (colourModeSelect)
+    colourModeSelect.addEventListener("change", function () {
       state.render.clusters.colorMode = this.value || "bars";
       drawTree();
     });
@@ -862,33 +837,25 @@ document.addEventListener("DOMContentLoaded", function () {
   // Branch width / colour live in the Appearance panel.
 
   // ── Palette selector ──
-  let CUSTOM_PALETTE = null;
-  function normalizeHexColor(s) {
+  const DEFAULT_PALETTE = baseColours.slice();
+  let customPalette = null;
+  function normaliseHexColour(s) {
     const v = (s || "").trim();
     if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
     if (/^[0-9a-fA-F]{6}$/.test(v)) return "#" + v;
     return null;
   }
-  function updatePalettePreview(colors) {
+  function updatePalettePreview(colours) {
     const box = document.getElementById("palette-preview");
     if (box)
-      box.innerHTML = colors
+      box.innerHTML = colours
         .map((c) => `<span title="${c}" style="background:${c};"></span>`)
         .join("");
   }
 
   function applyPalette(type) {
     const palettes = {
-      default: [
-        "#b84b4b",
-        "#849060",
-        "#3d7c74",
-        "#6e3f8a",
-        "#ceb94b",
-        "#3f648a",
-        "#3f408a",
-        "#da63aa",
-      ],
+      default: DEFAULT_PALETTE,
       pastel: [
         "#ffb3ba",
         "#ffdfba",
@@ -920,14 +887,14 @@ document.addEventListener("DOMContentLoaded", function () {
         "#9c755f",
       ],
     };
-    if (type === "custom" && CUSTOM_PALETTE && CUSTOM_PALETTE.length)
-      BASE_COLORS.splice(0, BASE_COLORS.length, ...CUSTOM_PALETTE);
+    if (type === "custom" && customPalette && customPalette.length)
+      baseColours.splice(0, baseColours.length, ...customPalette);
     else if (palettes[type])
-      BASE_COLORS.splice(0, BASE_COLORS.length, ...palettes[type]);
-    updatePalettePreview(BASE_COLORS);
-    if (Object.keys(state.CURRENT_CLUSTERS || {}).length > 0) {
-      state.CLUSTER_COLORS = generateClusterColors(
-        Math.max(...Object.values(state.CURRENT_CLUSTERS)) + 1,
+      baseColours.splice(0, baseColours.length, ...palettes[type]);
+    updatePalettePreview(baseColours);
+    if (Object.keys(state.runClusters || {}).length > 0) {
+      state.clusterColours = generateClusterColours(
+        Math.max(...Object.values(state.runClusters).map(Number)) + 1,
       );
       drawTree();
     }
@@ -938,42 +905,42 @@ document.addEventListener("DOMContentLoaded", function () {
     paletteSelect.addEventListener("change", function () {
       if (this.value === "custom") {
         var initial =
-          CUSTOM_PALETTE && CUSTOM_PALETTE.length
-            ? CUSTOM_PALETTE.join(",")
-            : BASE_COLORS.join(",");
-        var raw = prompt("Enter hex colors separated by commas:", initial);
+          customPalette && customPalette.length
+            ? customPalette.join(",")
+            : baseColours.join(",");
+        var raw = prompt("Enter hex colours separated by commas:", initial);
         if (raw == null) {
           this.value = "default";
           applyPalette("default");
           return;
         }
-        var parsed = raw.split(",").map(normalizeHexColor).filter(Boolean);
+        var parsed = raw.split(",").map(normaliseHexColour).filter(Boolean);
         if (parsed.length < 2) {
-          alert("Please provide at least 2 valid hex colors.");
+          alert("Please provide at least 2 valid hex colours.");
           this.value = "default";
           applyPalette("default");
           return;
         }
-        CUSTOM_PALETTE = parsed;
+        customPalette = parsed;
         applyPalette("custom");
         return;
       }
       applyPalette(this.value);
     });
   }
-  updatePalettePreview(BASE_COLORS);
+  updatePalettePreview(baseColours);
 
-  // ── Shuffle colors button ──
-  var btnShuffle = document.getElementById("btn-shuffle-colors");
+  // ── Shuffle colours button ──
+  var btnShuffle = document.getElementById("btn-shuffle-colours");
   if (btnShuffle) {
     btnShuffle.addEventListener("click", function () {
-      var shuffled = shuffle(BASE_COLORS.slice());
-      BASE_COLORS.splice(0, BASE_COLORS.length);
-      for (var i = 0; i < shuffled.length; i++) BASE_COLORS.push(shuffled[i]);
-      updatePalettePreview(BASE_COLORS);
-      if (Object.keys(state.CURRENT_CLUSTERS || {}).length > 0) {
-        state.CLUSTER_COLORS = generateClusterColors(
-          Math.max.apply(null, Object.values(state.CURRENT_CLUSTERS).map(Number)) + 1,
+      var shuffled = shuffle(baseColours.slice());
+      baseColours.splice(0, baseColours.length);
+      for (var i = 0; i < shuffled.length; i++) baseColours.push(shuffled[i]);
+      updatePalettePreview(baseColours);
+      if (Object.keys(state.runClusters || {}).length > 0) {
+        state.clusterColours = generateClusterColours(
+          Math.max.apply(null, Object.values(state.runClusters).map(Number)) + 1,
         );
         drawTree();
       }
@@ -992,13 +959,13 @@ document.addEventListener("DOMContentLoaded", function () {
   if (btnResetView) {
     btnResetView.addEventListener("click", function (e) {
       e.preventDefault();
-      if (state.LAST_TREE_SVG && state.LAST_TREE_ZOOM)
-        state.LAST_TREE_SVG.transition()
+      if (state.lastTreeSvg && state.lastTreeZoom)
+        state.lastTreeSvg.transition()
           .duration(150)
-          .call(state.LAST_TREE_ZOOM.transform, d3.zoomIdentity);
+          .call(state.lastTreeZoom.transform, d3.zoomIdentity);
       state.render.scale.width = 1.0;
       state.render.scale.height = 1.0;
-      clearAllCollapsedFlags(state.NEWICK_RAW_TREE);
+      clearAllCollapsedFlags(state.newickTree);
       drawTree();
     });
   }
@@ -1010,16 +977,16 @@ document.addEventListener("DOMContentLoaded", function () {
   var searchCounter = document.getElementById("search-counter");
   function updateSearchCounter() {
     if (!searchCounter) return;
-    var term = (state.SEARCH_TERM || "").toLowerCase();
+    var term = (state.searchTerm || "").toLowerCase();
     if (!term) {
       searchCounter.hidden = true;
       searchCounter.classList.remove("no-matches");
       return;
     }
     var n = 0;
-    if (state.NEWICK_RAW_TREE) {
+    if (state.newickTree) {
       var leaves = [];
-      collectLeafNamesData(state.NEWICK_RAW_TREE, leaves);
+      collectLeafNamesData(state.newickTree, leaves);
       for (var i = 0; i < leaves.length; i++) {
         if (String(leaves[i]).toLowerCase().includes(term)) n++;
       }
@@ -1033,8 +1000,8 @@ document.addEventListener("DOMContentLoaded", function () {
     searchInput.addEventListener("input", function () {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(function () {
-        state.SEARCH_TERM = searchInput.value.trim();
-        if (state.NEWICK_RAW_TREE) drawTree();
+        state.searchTerm = searchInput.value.trim();
+        if (state.newickTree) drawTree();
         updateSearchCounter();
       }, 200);
     });
@@ -1051,17 +1018,17 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
     btn("ctx-rename", function () {
-      if (!state.CTX_TARGET_DATA) return;
-      var c = getNodeCustom(state.CTX_TARGET_DATA);
-      var val = prompt("Rename node:", nodeDisplayName(state.CTX_TARGET_DATA));
+      if (!state.contextTargetData) return;
+      var c = getNodeCustom(state.contextTargetData);
+      var val = prompt("Rename node:", nodeDisplayName(state.contextTargetData));
       if (val != null) {
         c.renamedTo = val;
         drawTree();
       }
     });
     btn("ctx-highlight", function () {
-      if (!state.CTX_TARGET_DATA) return;
-      var c = getNodeCustom(state.CTX_TARGET_DATA);
+      if (!state.contextTargetData) return;
+      var c = getNodeCustom(state.contextTargetData);
       c.highlighted = !c.highlighted;
       drawTree();
     });
@@ -1069,8 +1036,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var ctxSliderVal = document.getElementById("ctx-size-value");
     if (ctxSlider) {
       ctxSlider.addEventListener("input", function () {
-        if (!state.CTX_TARGET_DATA) return;
-        var c = getNodeCustom(state.CTX_TARGET_DATA);
+        if (!state.contextTargetData) return;
+        var c = getNodeCustom(state.contextTargetData);
         c.radiusScale = parseFloat(ctxSlider.value);
         if (ctxSliderVal) ctxSliderVal.textContent = c.radiusScale.toFixed(1);
         drawTree();
@@ -1080,17 +1047,17 @@ document.addEventListener("DOMContentLoaded", function () {
       });
     }
     btn("ctx-copy-subtree", function () {
-      if (!state.CTX_TARGET_DATA) return;
+      if (!state.contextTargetData) return;
       var names = [];
-      collectLeafNamesData(state.CTX_TARGET_DATA, names);
+      collectLeafNamesData(state.contextTargetData, names);
       navigator.clipboard.writeText(names.join("\n")).then(
         () => showToast(names.length + " leaf names copied", "success", 2000),
         () => showToast("Copy failed", "danger"),
       );
     });
     btn("ctx-original-size", function () {
-      if (!state.CTX_TARGET_DATA) return;
-      var c = getNodeCustom(state.CTX_TARGET_DATA);
+      if (!state.contextTargetData) return;
+      var c = getNodeCustom(state.contextTargetData);
       c.lockOriginalSize = !c.lockOriginalSize;
       if (c.lockOriginalSize) c.radiusScale = 1;
       showToast(
@@ -1102,28 +1069,32 @@ document.addEventListener("DOMContentLoaded", function () {
       );
       drawTree();
     });
-    btn("ctx-select-cluster", function () {
-      if (!state.CTX_TARGET_DATA || !state.CURRENT_CLUSTERS) return;
-      var name = state.CTX_TARGET_DATA.name;
+    // Cluster id of the context-menu target (its first leaf for internal
+    // nodes), or null after a toast when there is none.
+    function ctxTargetClusterId() {
+      if (!state.contextTargetData || !state.currentClusters) return null;
+      var name = state.contextTargetData.name;
       if (!name) {
         var leaves = [];
-        collectLeafNamesData(state.CTX_TARGET_DATA, leaves);
+        collectLeafNamesData(state.contextTargetData, leaves);
         name = leaves[0];
       }
-      var cid = name ? state.CURRENT_CLUSTERS[name] : null;
-      if (cid == null) {
-        showToast("No cluster for this node", "info");
-        return;
-      }
+      var cid = name ? state.currentClusters[name] : null;
+      if (cid == null) showToast("No cluster for this node", "info");
+      return cid;
+    }
+    btn("ctx-select-cluster", function () {
+      var cid = ctxTargetClusterId();
+      if (cid == null) return;
       var nCid = Number(cid);
-      if (SELECTED_CLUSTER_IDS.has(nCid)) {
-        SELECTED_CLUSTER_IDS.delete(nCid);
-        if (SELECTED_CLUSTER_IDS.size === 0) {
+      if (selectedClusterIds.has(nCid)) {
+        selectedClusterIds.delete(nCid);
+        if (selectedClusterIds.size === 0) {
           showToast("Cluster focus cleared", "info", 1800);
         } else {
           showToast(
             "Focused clusters: " +
-              Array.from(SELECTED_CLUSTER_IDS)
+              Array.from(selectedClusterIds)
                 .sort((a, b) => a - b)
                 .join(", "),
             "info",
@@ -1131,10 +1102,10 @@ document.addEventListener("DOMContentLoaded", function () {
           );
         }
       } else {
-        SELECTED_CLUSTER_IDS.add(nCid);
+        selectedClusterIds.add(nCid);
         showToast(
           "Focused clusters: " +
-            Array.from(SELECTED_CLUSTER_IDS)
+            Array.from(selectedClusterIds)
               .sort((a, b) => a - b)
               .join(", "),
           "success",
@@ -1144,38 +1115,18 @@ document.addEventListener("DOMContentLoaded", function () {
       drawTree();
     });
     btn("ctx-rename-cluster", function () {
-      if (!state.CTX_TARGET_DATA || !state.CURRENT_CLUSTERS) return;
-      var name = state.CTX_TARGET_DATA.name;
-      if (!name) {
-        var leaves = [];
-        collectLeafNamesData(state.CTX_TARGET_DATA, leaves);
-        name = leaves[0];
-      }
-      var cid = name ? state.CURRENT_CLUSTERS[name] : null;
-      if (cid == null) {
-        showToast("No cluster for this node", "info");
-        return;
-      }
-      var current = BOX_LABEL_MAP[cid] || "C" + cid;
+      var cid = ctxTargetClusterId();
+      if (cid == null) return;
+      var current = boxLabelMap[cid] || "C" + cid;
       var val = prompt("Label for cluster " + cid + ":", current);
       if (val != null) {
-        BOX_LABEL_MAP[cid] = val;
+        boxLabelMap[cid] = val;
         drawTree();
       }
     });
     btn("ctx-adjust-box", function () {
-      if (!state.CTX_TARGET_DATA || !state.CURRENT_CLUSTERS) return;
-      var name = state.CTX_TARGET_DATA.name;
-      if (!name) {
-        var leaves = [];
-        collectLeafNamesData(state.CTX_TARGET_DATA, leaves);
-        name = leaves[0];
-      }
-      var cid = name ? state.CURRENT_CLUSTERS[name] : null;
-      if (cid == null) {
-        showToast("No cluster for this node", "info");
-        return;
-      }
+      var cid = ctxTargetClusterId();
+      if (cid == null) return;
       var adj = getBoxAdjust(cid);
       var padStr = prompt(
         "Box padding for cluster " + cid + " (padX, padY in px):",
@@ -1191,8 +1142,8 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     });
     btn("ctx-reset", function () {
-      if (!state.CTX_TARGET_DATA) return;
-      NODE_CUSTOM.delete(state.CTX_TARGET_DATA);
+      if (!state.contextTargetData) return;
+      nodeCustom.delete(state.contextTargetData);
       drawTree();
     });
   })();

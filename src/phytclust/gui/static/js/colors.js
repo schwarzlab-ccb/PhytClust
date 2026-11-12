@@ -3,7 +3,7 @@
 import { state } from "./state.js";
 
 // Cluster colours share their order and expansion with viz/palette.py.
-export const BASE_COLORS = [
+export const baseColours = [
   "#b84b4b", // red
   "#4f8f4a", // green
   "#da63aa", // pink
@@ -23,8 +23,8 @@ export const BASE_COLORS = [
 ];
 
 /** Return a shuffled copy of the colours. */
-export function shuffle(colors) {
-  const shuffled = colors.slice();
+export function shuffle(colours) {
+  const shuffled = colours.slice();
   for (let index = shuffled.length - 1; index > 0; index--) {
     const otherIndex = Math.floor(Math.random() * (index + 1));
     [shuffled[index], shuffled[otherIndex]] = [shuffled[otherIndex], shuffled[index]];
@@ -32,9 +32,9 @@ export function shuffle(colors) {
   return shuffled;
 }
 
-function readColor(color) {
-  const parsed = typeof color === "string" ? d3.color(color) : null;
-  if (!parsed) throw new Error(`Invalid colour: ${color}`);
+function readColour(colour) {
+  const parsed = typeof colour === "string" ? d3.color(colour) : null;
+  if (!parsed) throw new Error(`Invalid colour: ${colour}`);
   const rgb = parsed.rgb();
   // D3 represents transparent channels as NaN.
   if (rgb.opacity === 0) {
@@ -43,7 +43,7 @@ function readColor(color) {
     }
   }
   if (![rgb.r, rgb.g, rgb.b, rgb.opacity].every(Number.isFinite)) {
-    throw new Error(`Invalid colour: ${color}`);
+    throw new Error(`Invalid colour: ${colour}`);
   }
   return rgb;
 }
@@ -54,51 +54,45 @@ function checkFraction(value, name) {
   }
 }
 
-function lightenedColor(rgb, fraction, opacity = rgb.opacity) {
+function lightenedColour(rgb, fraction, opacity = rgb.opacity) {
   const channels = [rgb.r, rgb.g, rgb.b].map(channel => channel + (255 - channel) * fraction);
   return d3.rgb(...channels, opacity).formatRgb();
 }
 
-/** Blend a CSS colour toward white, preserving its opacity. */
-export function adjustLight(color, fraction) {
-  checkFraction(fraction, "Lightening fraction");
-  return lightenedColor(readColor(color), fraction);
-}
-
 /** Set a CSS colour's opacity without changing its RGB channels. */
-export function withAlpha(color, alpha) {
+export function withAlpha(colour, alpha) {
   checkFraction(alpha, "Opacity");
-  const rgb = readColor(color);
+  const rgb = readColour(colour);
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
 /** Expand the base palette with progressively lighter colours. */
-export function generateClusterColors(clusterCount) {
+export function generateClusterColours(clusterCount) {
   if (!Number.isSafeInteger(clusterCount) || clusterCount < 0) {
     throw new RangeError("Colour count must be a safe integer zero or greater.");
   }
   if (clusterCount === 0) return [];
-  if (!BASE_COLORS.length) throw new Error("The cluster palette is empty.");
-  const baseColors = BASE_COLORS.map(readColor);
-  if (clusterCount > baseColors.length * 7) {
-    console.warn(`Colours repeat beyond ${baseColors.length * 7} entries. Use cluster labels for larger partitions.`);
+  if (!baseColours.length) throw new Error("The cluster palette is empty.");
+  const parsedBase = baseColours.map(readColour);
+  if (clusterCount > parsedBase.length * 7) {
+    console.warn(`Colours repeat beyond ${parsedBase.length * 7} entries. Use cluster labels for larger partitions.`);
   }
-  const colors = new Array(clusterCount);
+  const colours = new Array(clusterCount);
   for (let index = 0; index < clusterCount; index++) {
-    const baseIndex = index % baseColors.length;
-    const roundIndex = Math.floor(index / baseColors.length);
+    const baseIndex = index % parsedBase.length;
+    const roundIndex = Math.floor(index / parsedBase.length);
     if (roundIndex === 0) {
-      colors[index] = BASE_COLORS[baseIndex];
+      colours[index] = baseColours[baseIndex];
       continue;
     }
     const fraction = Math.min(roundIndex * 0.14, 0.84);
-    const opacity = baseColors[baseIndex].opacity * Math.max(1 - roundIndex * 0.12, 0.58);
-    colors[index] = lightenedColor(baseColors[baseIndex], fraction, opacity);
+    const opacity = parsedBase[baseIndex].opacity * Math.max(1 - roundIndex * 0.12, 0.58);
+    colours[index] = lightenedColour(parsedBase[baseIndex], fraction, opacity);
   }
-  return colors;
+  return colours;
 }
 
-export function getThemeColors() {
+export function getThemeColours() {
   const style = getComputedStyle(document.documentElement);
   const themeBranch =
     style.getPropertyValue("--pc-tree-branch").trim() || "#000000";

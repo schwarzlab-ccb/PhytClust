@@ -2,35 +2,36 @@
 
 export const state = {
   // Tree data and current results.
-  HIER_CART: null,
-  HIER_CIRC: null,
-  CLUSTER_COLORS: [],
-  CURRENT_CLUSTERS: {},
-  NEWICK_RAW_TREE: null,
+  cartesianHierarchy: null,
+  circularHierarchy: null,
+  clusterColours: [],
+  currentClusters: {}, // Displayed map: outlier leaves are -1.
+  runClusters: {}, // The run's map, before outlier marking.
+  newickTree: null,
 
   isRunning: false,
-  latestOptimalKData: null,
-  latestApiData: null,
+  lastScoresData: null,
+  lastRunData: null,
   lastRunSignature: null,
-  latestRunId: null,
+  lastRunId: null,
   pendingSessionView: null,
-  LAST_TREE_SVG: null,
-  LAST_TREE_ZOOM: null,
-  LAST_ZOOM_LAYER: null,
-  LAST_TREE_TRANSFORM: d3.zoomIdentity,
-  LAST_COMPARE_SVG: null,
-  LAST_COMPARE_ZOOM: null,
-  LAST_COMPARE_LAYER: null,
-  SEARCH_TERM: "",
+  lastTreeSvg: null,
+  lastTreeZoom: null,
+  lastZoomLayer: null,
+  lastTreeTransform: d3.zoomIdentity,
+  lastCompareSvg: null,
+  lastCompareZoom: null,
+  lastCompareLayer: null,
+  searchTerm: "",
 
-  CLUSTER_VIEW_MODE: "peaks",
-  COMPARE_CONFIGS: [],
-  COMPARE_CONFIG_NEXT_ID: 1,
-  COMPARE_HIGHLIGHT_CHANGES: false,
-  COMPARE_REFERENCE_INDEX: 0,
-  COMPARE_CHANGED_LEAVES: new Set(),
+  clusterViewMode: "peaks",
+  compareConfigs: [],
+  compareConfigNextId: 1,
+  compareHighlightChanges: false,
+  compareReferenceIndex: 0,
+  compareChangedLeaves: new Set(),
 
-  CTX_TARGET_DATA: null,
+  contextTargetData: null,
   runHistory: [],
 
   // Display settings.
@@ -52,7 +53,7 @@ export const state = {
       internalRadius: 1.8,
     },
     clusters: {
-      colorMode: "bars", // bars or boxes
+      colorMode: "bars", // bars, boxes, or nodes
       labelFontSize: 8,
       showBoxLabels: true,
       showOutlierBoxes: true,
@@ -152,24 +153,24 @@ export const LABEL_PAD = 6;
 export const EXAMPLE_NEWICK =
   "(((A:5, B:3)C1:6, (C:3, D:7)D1:4)A13:22, (((E:7, F:13)E12:5, G:6)B23:10, H:60):35):0;";
 
-export const SELECTED_CLUSTER_IDS = new Set();
-export const BOX_LABEL_MAP = Object.create(null); // Cluster ID to custom name.
-export const BOX_ADJUST_MAP = Object.create(null); // Cluster ID to box offsets in pixels.
+export const selectedClusterIds = new Set();
+export const boxLabelMap = Object.create(null); // Cluster ID to custom name.
+export const boxAdjustMap = Object.create(null); // Cluster ID to box offsets in pixels.
 
 // Custom settings for each tree node.
-export const NODE_CUSTOM = new WeakMap();
+export const nodeCustom = new WeakMap();
 
 export function hasClusterFocus(clusterId) {
-  if (clusterId == null) return SELECTED_CLUSTER_IDS.size === 0;
+  if (clusterId == null) return selectedClusterIds.size === 0;
   return (
-    SELECTED_CLUSTER_IDS.size === 0 || SELECTED_CLUSTER_IDS.has(Number(clusterId))
+    selectedClusterIds.size === 0 || selectedClusterIds.has(Number(clusterId))
   );
 }
 
 export function getBoxAdjust(clusterId) {
   const key = String(clusterId);
-  if (!BOX_ADJUST_MAP[key]) {
-    BOX_ADJUST_MAP[key] = { dx: 0, dy: 0, padX: 0, padY: 0 };
+  if (!boxAdjustMap[key]) {
+    boxAdjustMap[key] = { dx: 0, dy: 0, padX: 0, padY: 0 };
   }
-  return BOX_ADJUST_MAP[key];
+  return boxAdjustMap[key];
 }
