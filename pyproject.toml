@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -13,10 +13,11 @@ phytclust = ["assets/*", "gui/static/**/*", "gui/templates/**/*"]
 
 [project]
 name = "phytclust"
-version = "1.0.0"
+version = "1.0.1"
 description = "PhytClust takes a phylogenetic tree as input and outputs monophyletic leaf clusters that best fit the tree structure."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [
     { name = "Katyayni Ganesan", email = "katyayni.ganesan@iccb-cologne.org" },
     { name = "Roland F Schwarz", email = "roland.schwarz@iccb-cologne.org" },
@@ -32,10 +33,15 @@ keywords = [
     "dynamic programming",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
 ]
 
 requires-python = ">=3.10"
@@ -61,6 +67,7 @@ dev = [
 ]
 gui = [
     "fastapi>=0.110",
+    "pydantic>=2",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",

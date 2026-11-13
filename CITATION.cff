@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use PhytClust in your work, please cite it."
+message: "If you use PhytClust, please cite the paper below (preferred-citation) and the software version you used."
 title: "PhytClust"
 type: software
 authors:
@@ -10,12 +10,37 @@ authors:
     given-names: "Roland F"
     email: "roland.schwarz@iccb-cologne.org"
 repository-code: "https://github.com/schwarzlab-ccb/PhytClust"
-url: "https://github.com/schwarzlab-ccb/PhytClust"
+url: "https://schwarzlab-ccb.github.io/PhytClust/"
 license: "GPL-3.0-only"
-version: 1.0.0
-date-released: '2026-10-04'
+version: 1.0.1
+date-released: '2026-11-13'
 keywords:
   - phylogenetics
   - clustering
   - dynamic programming
   - monophyly
+preferred-citation:
+  type: article
+  title: "PhytClust: efficient and optimal monophyletic partitioning of rooted phylogenetic trees"
+  authors:
+    - family-names: "Ganesan"
+      given-names: "Katyayni"
+    - family-names: "Billard"
+      given-names: "Elisa"
+    - family-names: "Kaufmann"
+      given-names: "Tom L"
+    - family-names: "Strange"
+      given-names: "Cody B"
+    - family-names: "Cwikla"
+      given-names: "Maja C."
+    - family-names: "Altenhoff"
+      given-names: "Adrian M"
+    - family-names: "Dessimoz"
+      given-names: "Christophe"
+    - family-names: "Schwarz"
+      given-names: "Roland F"
+  journal: "bioRxiv"
+  year: 2026
+  doi: "10.64898/2025.12.11.693738"
+  url: "https://doi.org/10.64898/2025.12.11.693738"
+  notes: "Preprint; update to the journal version after acceptance."

@@ -4,7 +4,6 @@ graft src/phytclust
 include pyproject.toml
 include LICENSE
 include README.md
-include CHANGELOG.md
 include CITATION.cff
 
 global-exclude .ipynb_checkpoints
