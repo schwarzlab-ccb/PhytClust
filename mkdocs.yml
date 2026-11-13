@@ -6,10 +6,19 @@ repo_url: https://github.com/schwarzlab-ccb/PhytClust
 
 theme:
   name: material
+  logo: img/phytclust_logo.png
+  favicon: img/favicon.png
   palette:
-    - scheme: default
-      primary: teal
-      accent: amber
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
   features:
     - navigation.instant
     - navigation.instant.progress
@@ -38,10 +47,6 @@ extra_css:
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - How It Works: concepts.md
-  - Visualisation: visualisation.md
-  - Tutorials:
-      - CLI End-to-End: tutorials/cli-end-to-end.md
-      - Python End-to-End: tutorials/python-end-to-end.md
-  - Reference: reference/index.md
+  - Usage: usage.md
+  - How it works: concepts.md
+  - Reference: reference.md

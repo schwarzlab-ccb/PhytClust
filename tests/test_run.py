@@ -146,7 +146,7 @@ def test_resolution_after_fixed_k_does_not_inherit_self_k():
     # Too few scores for resolution mode on this tree, so it runs globally.
     assert result["mode"] == "global"
 
-    with pytest.raises(InvalidKError, match="`top_n` must be"):
+    with pytest.raises(InvalidKError, match="top_n must be a positive integer"):
         pc.run(top_n=0, plot_scores=False)
 
 

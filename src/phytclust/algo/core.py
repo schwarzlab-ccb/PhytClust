@@ -675,8 +675,7 @@ class PhytClust:
 
         Returns a list of cluster maps in peak-rank order.
         """
-        if top_n < 1:
-            raise InvalidKError("`top_n` must be >= 1.")
+        top_n = positive_int(top_n, "top_n", error=InvalidKError)
         return self._run_peak_mode(
             resolution_on=False,
             top_n=top_n,
@@ -700,8 +699,7 @@ class PhytClust:
         With fewer than ``PeakConfig.resolution_min_scores`` scores (default 50),
         warn and use a global search for at least three peaks.
         """
-        if top_n < 1:
-            raise InvalidKError("top_n must be at least 1.")
+        top_n = positive_int(top_n, "top_n", error=InvalidKError)
         if num_bins < 1:
             raise ConfigurationError("num_bins must be at least 1.")
         return self._run_peak_mode(
@@ -784,6 +782,7 @@ class PhytClust:
         plot_scores: bool,
         peak_config: Optional[PeakConfig],
     ) -> dict[str, Any]:
+        top_n = positive_int(top_n, "top_n", error=InvalidKError)
         use_default_k = k is None and not by_resolution and top_n == 1
         k = k if k is not None else (self.k if use_default_k else None)
         if k is not None:
@@ -808,9 +807,6 @@ class PhytClust:
                 exact_k=int(k),
                 include_scores=False,
             )
-
-        if top_n < 1:
-            raise InvalidKError("`top_n` must be >= 1.")
 
         if by_resolution:
             clusters = self.best_by_resolution(

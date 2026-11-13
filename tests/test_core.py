@@ -111,6 +111,43 @@ def test_integer_cluster_counts_work_before_and_after_caching(count):
     assert clustering.alpha_info(count)["k"] == 2
 
 
+@pytest.mark.parametrize(
+    "method,kwargs",
+    [
+        ("run", {}),
+        ("run", {"k": 2}),
+        ("run", {"by_resolution": True}),
+        ("best_global", {}),
+        ("best_by_resolution", {}),
+    ],
+)
+@pytest.mark.parametrize(
+    "value", [1.5, 1.0, True, np.bool_(True), "2", None, 0, -1, np.nan, np.inf]
+)
+def test_peak_counts_reject_invalid_values_before_computing(method, kwargs, value):
+    # This tree has no peaks, so validation must not depend on finding one.
+    pc = PhytClust("((a:1,b:1):1,(c:1,d:1):1);")
+    with pytest.raises(InvalidKError, match="top_n must be a positive integer"):
+        getattr(pc, method)(top_n=value, plot_scores=False, **kwargs)
+    assert not pc._dp_ready
+
+
+@pytest.mark.parametrize("count", [1, np.int64(1)])
+def test_integer_peak_counts_work_with_cached_results(count):
+    pc = PhytClust(SAMPLE)
+    expected = pc.run(top_n=1, plot_scores=False)["k_values"]
+    assert expected
+    assert pc.run(top_n=count, plot_scores=False)["k_values"] == expected
+    assert len(pc.best_global(top_n=count, plot_scores=False)) == len(expected)
+
+
+def test_boolean_peak_count_cannot_use_constructor_default_k():
+    pc = PhytClust(SAMPLE, k=2)
+    with pytest.raises(InvalidKError, match="top_n must be a positive integer"):
+        pc.run(top_n=True, plot_scores=False)
+    assert not pc._dp_ready
+
+
 def test_small_children_can_form_one_valid_parent_cluster():
     pc = PhytClust("((a:1,b:1):1,c:1);", min_cluster_size=2)
 
